@@ -19,7 +19,11 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
     candidate_sheets = 0
 
     for idx, sheet in enumerate(workbook.worksheets, start=1):
-        parsed, next_seq, is_candidate = parse_sheet(sheet, sheet_index=idx, start_global_seq=next_seq)
+        parsed, next_seq, is_candidate, extraction_debug = parse_sheet(
+            sheet,
+            sheet_index=idx,
+            start_global_seq=next_seq,
+        )
         if is_candidate:
             candidate_sheets += 1
             parsed_sheets.append(parsed)
@@ -33,7 +37,11 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
                     f"notice_number={parsed.sheet_local_header.notice_number!r} "
                     f"sheet_no={parsed.sheet_no_detected!r} "
                     f"changes={len(parsed.changes)} "
-                    f"candidate={is_candidate}"
+                    f"candidate={is_candidate} "
+                    f"table_header_row_start={extraction_debug.get('table_header_row_start')} "
+                    f"potential_meta_rows={extraction_debug.get('potential_meta_rows')} "
+                    f"rejected_meta_rows={extraction_debug.get('rejected_meta_rows')} "
+                    f"reject_reasons={extraction_debug.get('reject_reasons')}"
                 ),
                 file=sys.stderr,
             )

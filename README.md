@@ -8,11 +8,11 @@
 - `parser/merged_cells.py` — чтение ячеек с учётом merged ranges.
 - `parser/sheet_classifier.py` — отбор листов-кандидатов и классификация (`full` / `continuation` / `unknown`).
 - `parser/sheet_parser.py` — парсинг одного листа (локальная шапка, номер листа, изменения).
-- `parser/change_extractor.py` — эвристика повторяющихся блоков изменений.
+- `parser/change_extractor.py` — извлечение блоков из области таблицы изменений.
 - `parser/models.py` — dataclass-модели и сериализация в JSON.
 - `parser/normalizer.py` — нормализация текста.
 - `parser/main.py` — CLI точка входа.
-- `tests/` — lightweight unit tests без реальных XLSX пользователя.
+- `tests/` — synthetic tests без реальных XLSX пользователя.
 
 ## Установка
 
@@ -24,39 +24,47 @@ pip install -r requirements.txt
 
 ## Запуск
 
-Базовый запуск:
-
 ```bash
 python -m parser.main "path/to/file.xlsx"
-```
-
-Сохранение JSON в файл:
-
-```bash
 python -m parser.main "path/to/file.xlsx" --output result.json
-```
-
-Режим локальной ручной диагностики:
-
-```bash
 python -m parser.main "path/to/file.xlsx" --debug --pretty
 ```
 
-## Что показывает `--debug`
+## Что изменено по реальным прогонам
 
-По каждому листу выводится (в `stderr`):
+### 1) Защита `notice_number`
 
-- имя листа;
+- Извлечение номера извещения теперь использует более строгий паттерн `Извещение ... № <код>`.
+- Значения вроде `"Извещение"` / `"об изменении"` считаются невалидными.
+- Номер должен содержать цифры (чтобы label не попадал в `notice_number`).
+
+### 2) Явный поиск таблицы изменений
+
+- Сначала ищется заголовочная зона таблицы по якорям:
+  - `Изм.`
+  - `Содержание изменения`
+- Разбор `changes` идёт только ниже найденного заголовка таблицы.
+- Строки выше таблицы не считаются meta-строками блоков.
+
+### 3) Удаление дублей merged text
+
+- При сборке текста строки схлопываются соседние одинаковые фрагменты.
+- При сборке `change_text` повторяющиеся соседние строки также схлопываются.
+- Это уменьшает дубли из merged cells.
+
+## Debug (`--debug`)
+
+Для каждого листа выводится:
+
+- `sheet`;
 - `sheet_kind`;
-- найденный `notice_number`;
-- найденный `sheet_no_detected`;
-- число найденных `change blocks`;
-- признак, что лист определён как кандидат.
-
-После прохода выводится итог по документу:
-
-- число candidate-листов;
-- общее число `all_changes`.
+- `notice_number`;
+- `sheet_no_detected`;
+- `changes`;
+- `table_header_row_start`;
+- `potential_meta_rows`;
+- `rejected_meta_rows`;
+- `reject_reasons`.
 
 ## Что смотреть в JSON при первичной проверке
 
@@ -64,32 +72,9 @@ python -m parser.main "path/to/file.xlsx" --debug --pretty
 - `sheet_count_detected`;
 - `sheets[].sheet_kind`;
 - `sheets[].sheet_no_detected`;
-- `sheets[].sheet_local_header.notice_number`;
-- `sheets[].changes[].change_index`, `doc_code`, `change_text`, `zone_ref`;
+- `sheets[].changes[].change_index`, `doc_code`, `change_text`;
 - `all_changes`;
 - `validation.errors` / `validation.warnings`.
-
-## Что делает MVP-1
-
-1. Читает все листы книги XLSX.
-2. Отбирает листы-кандидаты по базовым маркерам:
-   - `Извещение`
-   - `Изм.`
-   - `Содержание изменения`
-3. Классифицирует лист:
-   - `full` — если есть расширенные маркеры шапки (минимум 2 из набора)
-   - `continuation` — если есть `Лист`, но нет расширенной шапки
-   - `unknown` — если кандидат, но тип не распознан однозначно
-4. Ищет повторяющиеся блоки изменений по более строгому признаку meta-строки:
-   - наличие `Изм` + индекс изменения и/или код документа.
-5. При сборке `change_text` не подтягивает строки заголовков таблицы.
-6. Строит итоговый JSON документа и плоский `all_changes`.
-
-## Ограничения MVP-1
-
-- Эвристики текстовые (regex + ключевые слова), без глубокой бизнес-валидации.
-- `document_header` пока заполняется `null`-полями.
-- Распознавание `doc_code` и границ body-блока приблизительное и будет уточняться в MVP-2/3.
 
 ## Тесты
 
