@@ -78,7 +78,10 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
         if notice_number:
             break
 
-    document_header, header_debug = extract_document_header(first_full_sheet)
+    document_header, approvals, header_debug = extract_document_header(first_full_sheet)
+
+    if not notice_number and document_header.notice_number:
+        notice_number = document_header.notice_number
 
     parsed_document = ParsedDocument(
         document_type="change_notice",
@@ -90,6 +93,7 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
         sheets=parsed_sheets,
         all_changes=all_changes,
         validation=None,
+        approvals=approvals,
     )
     parsed_document.validation = validate_document(parsed_document)
     parsed_document = enrich_document(parsed_document, header_debug=header_debug)
@@ -105,6 +109,8 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
             file=sys.stderr,
         )
         print(f"[debug] header_validation_fields_checked={list(IMPORTANT_HEADER_FIELDS)}", file=sys.stderr)
+        print(f"[debug] approvals_found={header_debug.get('approvals_found')} approvals_missing={header_debug.get('approvals_missing')}", file=sys.stderr)
+        print(f"[debug] developer_candidate={header_debug.get('fields', {}).get('developer')} notice_number_candidate={header_debug.get('fields', {}).get('notice_number')} sheet_no_declared_candidate={header_debug.get('fields', {}).get('sheet_no_declared')} code_candidate={header_debug.get('fields', {}).get('code')}", file=sys.stderr)
         print(
             f"[debug] validation_errors={parsed_document.validation.errors} validation_warnings={parsed_document.validation.warnings}",
             file=sys.stderr,

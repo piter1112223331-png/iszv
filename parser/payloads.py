@@ -54,6 +54,8 @@ def build_llm_payload(doc: ParsedDocument) -> dict:
         item = {k: v for k, v in item.items() if v is not None}
         compact_changes.append(item)
 
+    approvals = {k: v for k, v in asdict(doc.approvals).items() if v is not None}
+
     return {
         "source_file": doc.source_file,
         "notice_number": doc.notice_number,
@@ -62,6 +64,7 @@ def build_llm_payload(doc: ParsedDocument) -> dict:
         "changes": compact_changes,
         "warnings": doc.validation.warnings,
         "errors": doc.validation.errors,
+        **({"approvals": approvals} if approvals else {}),
         "summary": {
             "changes_count": len(compact_changes),
             "warnings_count": len(doc.validation.warnings),
@@ -71,14 +74,26 @@ def build_llm_payload(doc: ParsedDocument) -> dict:
 
 
 def build_flowis_payload(doc: ParsedDocument) -> dict:
+    approvals = {k: v for k, v in asdict(doc.approvals).items() if v is not None}
+
     return {
         "source_file": doc.source_file,
         "status": doc.status,
         "notice_number": doc.notice_number,
+        "developer": doc.document_header.developer,
+        "code": doc.document_header.code,
+        "sheet_no_declared": doc.document_header.sheet_no_declared,
         "sheet_count_detected": doc.sheet_count_detected,
         "sheet_total_declared": doc.document_header.sheet_total_declared,
         "reason": doc.document_header.reason,
         "stock_instruction": doc.document_header.stock_instruction,
+        "implementation_instruction": doc.document_header.implementation_instruction,
+        "applicability": doc.document_header.applicability,
+        "distribution": doc.document_header.distribution,
+        "approvals_author": doc.approvals.author,
+        "approvals_reviewer": doc.approvals.reviewer,
+        "approvals_norm_control": doc.approvals.norm_control,
+        "approvals_approver": doc.approvals.approver,
         "changes_count": len(doc.all_changes),
         "warnings": doc.validation.warnings,
         "errors": doc.validation.errors,

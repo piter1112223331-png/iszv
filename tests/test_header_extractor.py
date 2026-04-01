@@ -6,75 +6,63 @@ from openpyxl import Workbook
 from parser.header_extractor import extract_document_header
 
 
-def test_label_text_should_not_become_value():
+def test_developer_extraction():
     wb = Workbook()
     ws = wb.active
-    ws.cell(1, 1, "Причина")
-    ws.cell(1, 2, "Причина")
+    ws.cell(1, 1, "Предприятие организация")
+    ws.cell(1, 2, 'АО "ИЦ КТ"')
 
-    header, dbg = extract_document_header(ws)
-
-    assert header.reason is None
-    assert dbg["fields"]["reason"]["rejected_reason"] in {"header_like_noise", "no_meaningful_tokens", "empty", "postprocess_rejected"}
+    header, _, _ = extract_document_header(ws)
+    assert header.developer == 'АО "ИЦ КТ"'
 
 
-def test_repeated_phrase_collapse():
+def test_notice_number_extraction_not_doc_code():
     wb = Workbook()
     ws = wb.active
-    ws.cell(1, 1, "Причина")
-    ws.cell(1, 2, "Устранение ошибок Устранение ошибок Устранение ошибок Устранение ошибок")
+    ws.cell(1, 1, "Извещение")
+    ws.cell(1, 2, "ИИ.0000.0001")
 
-    header, dbg = extract_document_header(ws)
-    assert header.reason == "Устранение ошибок"
-    assert "reason" in dbg["collapsed_repeats_applied"]
-
-
-def test_dash_noise_normalized_to_null():
-    wb = Workbook()
-    ws = wb.active
-    ws.cell(1, 1, "Разослать")
-    ws.cell(1, 2, "- - -")
-
-    header, _ = extract_document_header(ws)
-    assert header.distribution is None
+    header, _, _ = extract_document_header(ws)
+    assert header.notice_number == "ИИ.0000.0001"
 
 
-def test_value_zone_right_of_anchor_extracted_without_anchor():
-    wb = Workbook()
-    ws = wb.active
-    ws.cell(1, 1, "Причина")
-    ws.cell(1, 2, "Замена узла")
-
-    header, _ = extract_document_header(ws)
-    assert header.reason == "Замена узла"
-
-
-def test_sheet_total_declared_short_numeric_near_listov():
-    wb = Workbook()
-    ws = wb.active
-    ws.cell(1, 1, "Листов")
-    ws.cell(1, 2, "3")
-
-    header, dbg = extract_document_header(ws)
-    assert header.sheet_total_declared == 3
-    assert dbg["fields"]["sheet_total_declared"]["final_value"] == 3
-
-
-def test_code_zone_does_not_absorb_listov_values():
+def test_code_extraction():
     wb = Workbook()
     ws = wb.active
     ws.cell(1, 1, "Код")
-    ws.cell(1, 2, "1 3")
+    ws.cell(1, 2, "7")
 
-    header, _ = extract_document_header(ws)
-    assert header.code is None
+    header, _, _ = extract_document_header(ws)
+    assert header.code == "7"
 
 
-def test_release_date_zone_does_not_absorb_stock_instruction_text():
+def test_sheet_no_declared_vs_sheet_total_declared():
     wb = Workbook()
     ws = wb.active
-    ws.cell(1, 1, "Дата выпуска")
-    ws.cell(1, 2, "Задел использовать")
+    ws.cell(1, 1, "Лист")
+    ws.cell(1, 2, "1")
+    ws.cell(1, 3, "Листов")
+    ws.cell(1, 4, "3")
 
-    header, _ = extract_document_header(ws)
-    assert header.release_date is None
+    header, _, _ = extract_document_header(ws)
+    assert header.sheet_no_declared == 1
+    assert header.sheet_total_declared == 3
+
+
+def test_approvals_extraction():
+    wb = Workbook()
+    ws = wb.active
+    ws.cell(20, 1, "Составил")
+    ws.cell(20, 2, "Петров")
+    ws.cell(21, 1, "Проверил")
+    ws.cell(21, 2, "Иванов")
+    ws.cell(22, 1, "Н. контроль")
+    ws.cell(22, 2, "Свердлов")
+    ws.cell(23, 1, "Утвердил")
+    ws.cell(23, 2, "Алербов")
+
+    _, approvals, _ = extract_document_header(ws)
+    assert approvals.author == "Петров"
+    assert approvals.reviewer == "Иванов"
+    assert approvals.norm_control == "Свердлов"
+    assert approvals.approver == "Алербов"

@@ -48,8 +48,11 @@ class SheetResult:
 @dataclass
 class DocumentHeader:
     sender: str | None = None
+    developer: str | None = None
+    notice_number: str | None = None
     reason: str | None = None
     code: str | None = None
+    sheet_no_declared: int | None = None
     sheet_total_declared: int | None = None
     release_center: str | None = None
     release_date: str | None = None
@@ -57,6 +60,14 @@ class DocumentHeader:
     implementation_instruction: str | None = None
     applicability: str | None = None
     distribution: str | None = None
+
+
+@dataclass
+class Approvals:
+    author: str | None = None
+    reviewer: str | None = None
+    norm_control: str | None = None
+    approver: str | None = None
 
 
 @dataclass
@@ -77,6 +88,7 @@ class ParsedDocument:
     sheets: list[SheetResult]
     all_changes: list[ChangeBlock]
     validation: ValidationResult
+    approvals: Approvals = field(default_factory=Approvals)
     status: str | None = None
     summary: dict = field(default_factory=dict)
     llm_payload: dict = field(default_factory=dict)

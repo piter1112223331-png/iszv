@@ -8,57 +8,41 @@ python -m parser.main "path/to/file.xlsx" --output result.json
 python -m parser.main "path/to/file.xlsx" --debug --pretty
 ```
 
-## MVP-3: слои результата
+## MVP-3+ business attributes
 
-Полный JSON (совместим с MVP-1/2) сохраняется и дополняется.
-
-Добавлены слои:
-- `status`: `ok|warning|error`
-- `summary`
-- `llm_payload` (компактный слой для локальной LLM)
-- `flowis_payload` (плоский слой для процесса)
-- `validation_details` (машиночитаемые детали ошибок/предупреждений)
-
-## LLM payload
-
-Содержит:
-- source_file
+`document_header` расширен полями формы:
+- developer
 - notice_number
-- sheet_count_detected
-- document_header_compact (только непустые)
-- changes (плоский список)
-- warnings/errors
-- summary
-
-В `changes` оставлены только нужные поля + тех. флаги:
-- sheet_no
-- change_index
-- doc_code
-- change_text
-- change_seq_global
-- has_doc_code
-- has_change_text
-- text_length
-
-## Flowis payload
-
-Плоская структура:
-- source_file
-- status
-- notice_number
-- sheet_count_detected
-- sheet_total_declared
 - reason
+- code
+- sheet_no_declared
+- sheet_total_declared
 - stock_instruction
-- changes_count
-- warnings
-- errors
+- implementation_instruction
+- applicability
+- distribution
+- release_center / release_date (если извлекаются)
+
+Добавлен top-level `approvals`:
+- author
+- reviewer
+- norm_control
+- approver
+
+## Layered payloads
+
+- Full JSON (подробный слой) остаётся совместимым
+- `llm_payload` (compact)
+- `flowis_payload` (flat)
+- `validation_details` (machine-readable)
+- `status`, `summary`
 
 ## Debug (`--debug`)
 
-Показывает:
-- header extraction debug
-- validation warnings/errors
+Включает:
+- header field diagnostics
+- approvals_found / approvals_missing
+- developer/notice/code/sheet_no candidates
 - computed_status
 - summary
 - llm_payload_preview
@@ -69,5 +53,3 @@ python -m parser.main "path/to/file.xlsx" --debug --pretty
 ```bash
 pytest -q
 ```
-
-Synthetic tests покрывают extraction, header extraction, validation и payload-слои MVP-3.

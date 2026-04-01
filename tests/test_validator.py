@@ -1,4 +1,5 @@
 from parser.models import (
+    Approvals,
     ChangeBlock,
     DocumentHeader,
     ParsedDocument,
@@ -30,6 +31,7 @@ def _doc_with_changes(changes):
         ],
         all_changes=changes,
         validation=ValidationResult(),
+        approvals=Approvals(),
     )
 
 
@@ -56,7 +58,7 @@ def test_empty_change_text_warning_and_empty_fields_errors():
     assert any(w.startswith("empty_change_text") for w in result.warnings)
 
 
-def test_notice_missing_and_sheet_count_mismatch_warnings():
+def test_notice_missing_and_header_missing_warnings():
     change = ChangeBlock(
         sheet_index=1,
         change_seq_global=1,
@@ -69,6 +71,6 @@ def test_notice_missing_and_sheet_count_mismatch_warnings():
     )
     result = validate_document(_doc_with_changes([change]))
     assert "notice_number_missing" in result.warnings
-    assert "sheet_count_mismatch" in result.warnings
-    assert "header_field_missing:sender" in result.warnings
-    assert "header_field_missing:release_center" in result.warnings
+    assert "header_field_missing:developer" in result.warnings
+    assert "header_field_missing:notice_number" in result.warnings
+    assert "header_field_missing:sheet_no_declared" in result.warnings

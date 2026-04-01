@@ -6,9 +6,14 @@ from parser.models import ParsedDocument, ValidationResult
 
 
 IMPORTANT_HEADER_FIELDS = (
+    "developer",
+    "notice_number",
+    "reason",
+    "code",
+    "sheet_no_declared",
+    "sheet_total_declared",
     "sender",
     "release_center",
-    "reason",
     "release_date",
     "stock_instruction",
     "implementation_instruction",

@@ -1,4 +1,5 @@
 from parser.models import (
+    Approvals,
     ChangeBlock,
     DocumentHeader,
     ParsedDocument,
@@ -25,9 +26,20 @@ def _doc(errors=None, warnings=None):
         document_type="change_notice",
         template_version="notice_multi_sheet_v1",
         source_file="f.xlsx",
-        notice_number=None,
+        notice_number="ИИ.0000.0001",
         sheet_count_detected=1,
-        document_header=DocumentHeader(reason="Причина", sheet_total_declared=1, stock_instruction="Нет"),
+        document_header=DocumentHeader(
+            developer='АО "ИЦ КТ"',
+            notice_number="ИИ.0000.0001",
+            reason="Причина",
+            code="7",
+            sheet_no_declared=1,
+            sheet_total_declared=1,
+            stock_instruction="Нет",
+            implementation_instruction="-",
+            applicability="-",
+            distribution="-",
+        ),
         sheets=[
             SheetResult(
                 sheet_index=1,
@@ -40,6 +52,7 @@ def _doc(errors=None, warnings=None):
         ],
         all_changes=[ch],
         validation=ValidationResult(template_detected=True, errors=errors or [], warnings=warnings or []),
+        approvals=Approvals(author="Петров", reviewer="Иванов", norm_control="Свердлов", approver="Алербов"),
     )
 
 
@@ -65,17 +78,21 @@ def test_llm_payload_generation_and_no_duplicate_changes():
     assert len(payload["changes"]) == 1
     assert "raw_meta_text" not in payload["changes"][0]
     assert "zone_ref" not in payload["changes"][0]
+    assert payload["document_header_compact"]["developer"] == 'АО "ИЦ КТ"'
+    assert payload["approvals"]["author"] == "Петров"
 
 
-def test_flowis_payload_generation():
+def test_flowis_payload_generation_with_approvals():
     d = enrich_document(_doc(warnings=["w1"]))
     f = d.flowis_payload
     assert f["status"] == "warning"
     assert f["changes_count"] == 1
+    assert f["developer"] == 'АО "ИЦ КТ"'
+    assert f["approvals_author"] == "Петров"
 
 
 def test_validation_details_generation():
-    d = enrich_document(_doc(errors=["empty_doc_code:sheet=1:seq=1"], warnings=["header_field_missing:sender"]))
+    d = enrich_document(_doc(errors=["empty_doc_code:sheet=1:seq=1"], warnings=["header_field_missing:developer"]))
     assert d.validation_details["errors"][0]["code"] == "empty_doc_code"
     assert d.validation_details["warnings"][0]["scope"] == "header"
 
