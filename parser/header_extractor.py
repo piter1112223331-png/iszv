@@ -25,7 +25,7 @@ HEADER_ANCHORS = {
     "release_center": ("центр", "выпуска"),
     "release_date": ("дата выпуска",),
     "stock_instruction": ("указание о заделе",),
-    "implementation_instruction": ("указания о внедрении",),
+    "implementation_instruction": ("указания о внедрении", "указание о внедрении"),
     "applicability": ("применяемость",),
     "distribution": ("разослать",),
 }
@@ -59,6 +59,8 @@ HEADER_NOISE_MARKERS = (
     "проверил",
     "н. контроль",
     "утвердил",
+    "т. контроль",
+    "предст. заказ",
 )
 APPROVAL_ANCHORS = {
     "author": ("составил",),
@@ -167,6 +169,10 @@ def _extract_sheet_numbers(rows: list[tuple[int, list[str | None]]]) -> tuple[in
         if sheet_no is not None and sheet_total is not None:
             break
 
+    if sheet_no is None and sheet_total == 1:
+        sheet_no = 1
+        dbg["sheet_no_declared_candidate"] = 1
+
     return sheet_no, sheet_total, dbg
 
 
@@ -207,12 +213,14 @@ def _extract_sheet_total_declared(rows: list[tuple[int, list[str | None]]]) -> t
 
 
 def _extract_approval_value(row: list[str | None], anchor_col: int) -> tuple[str | None, str | None, list[str]]:
-    window = [normalize_text(row[i]) for i in range(anchor_col, min(len(row), anchor_col + 4))]
+    # strict right-side window to avoid service columns (e.g. Т. контроль, Предст. заказ.)
+    window = [normalize_text(row[i]) for i in range(anchor_col, min(len(row), anchor_col + 2))]
     saw_label_like = False
     for cand in window:
         if not cand:
             continue
-        if _is_label_like(cand):
+        cand_norm = normalize_for_match(cand)
+        if _is_label_like(cand) or "контроль" in cand_norm or "предст" in cand_norm:
             saw_label_like = True
             continue
         return cand, None, [c for c in window if c]
@@ -262,6 +270,8 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "developer_search_window": [],
         "code_search_window": [],
         "sheet_no_declared_search_window": [],
+        "code_value_window": [],
+        "dash_field_candidates": {},
     }
     if sheet is None:
         debug["missing_fields"] = list(asdict(header).keys())
@@ -297,7 +307,7 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
             for col_idx, norm in enumerate(row_norm, start=1):
                 if not norm:
                     continue
-                if field == "developer":
+                if field in {"developer", "implementation_instruction"}:
                     if not any(a in norm for a in anchors):
                         continue
                 else:
@@ -309,6 +319,10 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
                 if not raw_candidate and i + 1 < len(rows):
                     raw_candidate = _extract_right_zone(rows[i + 1][1], col_idx, width)
 
+                if field == "code":
+                    debug["code_value_window"].append(raw_candidate)
+                if field in {"implementation_instruction", "applicability", "distribution"}:
+                    debug["dash_field_candidates"][field] = raw_candidate
                 cleaned_candidate, reject_reason, collapsed = _sanitize_candidate(field, raw_candidate, row_norm)
                 if reject_reason is None and cleaned_candidate:
                     setattr(header, field, cleaned_candidate)
@@ -323,6 +337,8 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
                 }
                 if collapsed:
                     debug["collapsed_repeats_applied"].append(field)
+                if field == "code" and getattr(header, field) is None:
+                    continue
                 break
 
     if header.developer is None:
