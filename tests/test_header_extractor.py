@@ -4,6 +4,8 @@ openpyxl = pytest.importorskip("openpyxl")
 from openpyxl import Workbook
 
 from parser.header_extractor import extract_document_header
+from parser.models import ParsedDocument, ValidationResult
+from parser.payloads import enrich_document
 
 
 def _fill_common_header(ws, base_row: int = 1, shifted: bool = False):
@@ -68,6 +70,7 @@ def test_code_extraction_from_dedicated_cell_not_sheet_counter():
     assert header.code == "7"
     assert debug["fields"]["code"]["anchor_cell"] == "R1C1"
     assert debug["fields"]["code"]["value_window"][0] == "7"
+    assert debug["code_local_zone_filtered"] is True
 
 
 def test_sheet_no_declared_extraction_from_list_cell():
@@ -151,3 +154,73 @@ def test_anchor_based_local_zones_work_for_shifted_layouts():
         assert approvals.reviewer == "Иванов"
         assert approvals.norm_control == "Свердлов"
         assert approvals.approver == "Алербов"
+
+
+def test_distribution_preserves_dash_and_debug_flag():
+    wb = Workbook()
+    ws = wb.active
+    ws.cell(1, 1, "Разослать")
+    ws.cell(1, 2, "-")
+    header, _, debug = extract_document_header(ws)
+    assert header.distribution == "-"
+    assert debug["distribution_dash_detected"] is True
+
+
+def test_sheet_no_declared_prefers_list_anchor_on_multisheet_like_row():
+    wb = Workbook()
+    ws = wb.active
+    ws.cell(1, 1, "Лист")
+    ws.cell(1, 2, "1")
+    ws.cell(1, 3, "Листов")
+    ws.cell(1, 4, "3")
+    header, _, debug = extract_document_header(ws)
+    assert header.sheet_no_declared == 1
+    assert header.sheet_total_declared == 3
+    assert debug["sheet_no_declared_resolution_reason"] == "local_anchor_лист"
+
+
+def test_approvals_reject_short_fragments_and_pick_surname():
+    wb = Workbook()
+    ws = wb.active
+    ws.cell(20, 1, "Составил")
+    ws.cell(20, 2, "И")
+    ws.cell(20, 3, "Петров")
+    ws.cell(21, 1, "Проверил")
+    ws.cell(21, 2, "К")
+    ws.cell(21, 3, "Иванов")
+    ws.cell(22, 1, "Н. контроль")
+    ws.cell(22, 2, "А")
+    ws.cell(22, 3, "Свердлов")
+    ws.cell(23, 1, "Утвердил")
+    ws.cell(23, 2, "Й1")
+    ws.cell(23, 3, "Алербов")
+    _, approvals, debug = extract_document_header(ws)
+    assert approvals.author == "Петров"
+    assert approvals.reviewer == "Иванов"
+    assert approvals.norm_control == "Свердлов"
+    assert approvals.approver == "Алербов"
+    assert debug["approvals_short_candidates_rejected"] == {}
+
+
+def test_developer_survives_into_serialized_payload():
+    header_wb = Workbook()
+    ws = header_wb.active
+    ws.cell(1, 1, "Предприятие организация")
+    ws.cell(1, 2, 'АО "ИЦ КТ"')
+    header, approvals, debug = extract_document_header(ws)
+    doc = ParsedDocument(
+        document_type="change_notice",
+        template_version="v1",
+        source_file="x.xlsx",
+        notice_number=None,
+        sheet_count_detected=1,
+        document_header=header,
+        sheets=[],
+        all_changes=[],
+        validation=ValidationResult(template_detected=True),
+        approvals=approvals,
+    )
+    doc = enrich_document(doc, header_debug=debug)
+    assert doc.document_header.developer == 'АО "ИЦ КТ"'
+    assert doc.flowis_payload["developer"] == 'АО "ИЦ КТ"'
+    assert debug["developer_final_serialized"] == 'АО "ИЦ КТ"'

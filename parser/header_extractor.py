@@ -164,13 +164,17 @@ def _find_header_anchor(
     *,
     top_rows: int = 80,
     all_words: bool = True,
+    exact: bool = False,
 ) -> tuple[int, int, str] | None:
     for ridx, (excel_row, row) in enumerate(rows[:top_rows]):
         norm_cells = [normalize_for_match(v) for v in row]
         for cidx, cell_norm in enumerate(norm_cells):
             if not cell_norm:
                 continue
-            matched = all(a in cell_norm for a in anchors) if all_words else any(a in cell_norm for a in anchors)
+            if exact:
+                matched = any(cell_norm == a for a in anchors)
+            else:
+                matched = all(a in cell_norm for a in anchors) if all_words else any(a in cell_norm for a in anchors)
             if matched:
                 return ridx, cidx, f"R{excel_row}C{cidx + 1}"
     return None
@@ -182,11 +186,13 @@ def _extract_header_field_local(
     anchors: tuple[str, ...],
     *,
     all_words: bool = True,
+    top_rows: int = 100,
+    exact_anchor: bool = False,
     offsets: tuple[int, ...] = (1, 2),
     include_next_row: bool = True,
 ) -> tuple[str | None, dict[str, object]]:
     debug_info: dict[str, object] = {"anchor_cell": None, "value_window": [], "raw_candidate": None}
-    anchor = _find_header_anchor(rows, anchors, top_rows=80, all_words=all_words)
+    anchor = _find_header_anchor(rows, anchors, top_rows=top_rows, all_words=all_words, exact=exact_anchor)
     if not anchor:
         return None, debug_info
     ridx, cidx, anchor_cell = anchor
@@ -200,8 +206,7 @@ def _extract_header_field_local(
             # exclude sheet counters caught near "Лист/Листов"
             if not re.fullmatch(r"\d+", candidate):
                 continue
-            left_ctx = normalize_for_match(rows[ridx][1][max(0, cidx - 1)] if cidx > 0 else None)
-            if "лист" in left_ctx:
+            if candidate in {"0", "1"} and any("лист" in normalize_for_match(v) for v in rows[ridx][1][cidx + 1 : cidx + 5]):
                 continue
         if field == "developer" and not any(candidate.startswith(prefix) for prefix in ORG_PREFIXES):
             continue
@@ -212,7 +217,8 @@ def _extract_header_field_local(
 
 def _extract_sheet_number_local(rows: list[tuple[int, list[str | None]]], target: str) -> tuple[int | None, dict[str, object]]:
     debug_info: dict[str, object] = {"anchor_cell": None, "value_window": [], "raw_candidate": None}
-    anchor = _find_header_anchor(rows, (target,), top_rows=80, all_words=False)
+    exact = target in {"лист", "листов"}
+    anchor = _find_header_anchor(rows, (target,), top_rows=100, all_words=False, exact=exact)
     if not anchor:
         return None, debug_info
     ridx, cidx, anchor_cell = anchor
@@ -315,6 +321,9 @@ def _extract_approval_value(rows: list[tuple[int, list[str | None]]], row_idx: i
         cand_norm = normalize_for_match(cand)
         if _is_label_like(cand) or "контроль" in cand_norm or "предст" in cand_norm:
             continue
+        token = re.sub(r"[^а-яa-zё]", "", cand_norm, flags=re.IGNORECASE)
+        if len(token) <= 2:
+            continue
         return cand, None, values
     return None, ("label_like" if values else "empty"), values
 
@@ -329,6 +338,7 @@ def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approv
         "approval_block_detected": False,
         "approval_anchor_cells": {},
         "approvals_raw_candidates": {},
+        "approvals_short_candidates_rejected": {},
     }
     tail = rows[max(0, len(rows) - 80) :]
 
@@ -349,6 +359,9 @@ def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approv
                     if val:
                         setattr(approvals, field, val)
                     else:
+                        short_rejected = [v for v in window if len(re.sub(r"[^а-яa-zё]", "", normalize_for_match(v), flags=re.IGNORECASE)) <= 2]
+                        if short_rejected:
+                            debug["approvals_short_candidates_rejected"][field] = short_rejected
                         debug["approvals_rejected_reasons"][field] = reason
                     break
     debug["approval_block_detected"] = anchor_hits >= 2
@@ -373,6 +386,11 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "approvals_rejected_reasons": {},
         "approvals_value_windows": {},
         "header_anchor_cells": {},
+        "code_local_zone_filtered": False,
+        "sheet_no_declared_resolution_reason": None,
+        "distribution_dash_detected": False,
+        "developer_final_serialized": None,
+        "approvals_short_candidates_rejected": {},
     }
     if sheet is None:
         debug["missing_fields"] = list(asdict(header).keys())
@@ -403,6 +421,8 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         ("distribution", ("разослать",), True),
     ):
         candidate, local_dbg = _extract_header_field_local(rows, field, anchors, all_words=all_words, offsets=(1, 2), include_next_row=True)
+        if field == "code":
+            debug["code_local_zone_filtered"] = bool(local_dbg["value_window"])
         debug["header_anchor_cells"][field] = local_dbg["anchor_cell"]
         cleaned_candidate, reject_reason, collapsed = _sanitize_candidate(field, candidate, [])
         if cleaned_candidate is not None and reject_reason is None:
@@ -431,6 +451,7 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "final_value": header.sheet_no_declared,
         "collapsed_repeats_applied": False,
     }
+    debug["sheet_no_declared_resolution_reason"] = "local_anchor_лист" if header.sheet_no_declared is not None else "not_found"
 
     sheet_total_local, sheet_total_local_dbg = _extract_sheet_number_local(rows, "листов")
     debug["header_anchor_cells"]["sheet_total_declared"] = sheet_total_local_dbg["anchor_cell"]
@@ -442,6 +463,8 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         debug["fields"]["sheet_total_declared"]["rejected_reason"] = None
     debug["fields"]["sheet_total_declared"]["anchor_cell"] = sheet_total_local_dbg["anchor_cell"]
     debug["fields"]["sheet_total_declared"]["value_window"] = sheet_total_local_dbg["value_window"]
+    if header.distribution == "-":
+        debug["distribution_dash_detected"] = True
 
     for i, (_, row_values) in enumerate(rows[:80]):
         row_norm = [normalize_for_match(v) for v in row_values]
@@ -492,6 +515,7 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
     debug["approvals_value_windows"] = appr_debug.get("approvals_value_windows", {})
     debug["approvals_raw_candidates"] = appr_debug.get("approvals_raw_candidates", {})
     debug["approvals_final_candidates"] = asdict(approvals)
+    debug["approvals_short_candidates_rejected"] = appr_debug.get("approvals_short_candidates_rejected", {})
 
     fields = asdict(header)
     debug["found_fields"] = [k for k, v in fields.items() if v is not None]
@@ -506,5 +530,6 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
                 "final_value": fields[k],
                 "collapsed_repeats_applied": False,
             }
+    debug["developer_final_serialized"] = header.developer
 
     return header, approvals, debug
