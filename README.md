@@ -45,6 +45,10 @@ python -m parser.main "path/to/file.xlsx" --debug --pretty
 - `blocks_closed_by_stop_marker`
 - `notice_candidates`
 - `rejected_notice_candidates`
+- `first_block_detected`
+- `first_block_body_rows`
+- `first_block_body_nonempty_cells`
+- `first_block_closed_reason`
 
 ## Тесты
 

@@ -46,6 +46,10 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
                     f"stop_markers_hit={extraction_debug.get('stop_markers_hit')} "
                     f"blocks_closed_by_next_meta={extraction_debug.get('blocks_closed_by_next_meta')} "
                     f"blocks_closed_by_stop_marker={extraction_debug.get('blocks_closed_by_stop_marker')} "
+                    f"first_block_detected={extraction_debug.get('first_block_detected')} "
+                    f"first_block_body_rows={extraction_debug.get('first_block_body_rows')} "
+                    f"first_block_body_nonempty_cells={extraction_debug.get('first_block_body_nonempty_cells')} "
+                    f"first_block_closed_reason={extraction_debug.get('first_block_closed_reason')} "
                     f"notice_candidates={extraction_debug.get('notice_candidates')} "
                     f"rejected_notice_candidates={extraction_debug.get('rejected_notice_candidates')}"
                 ),

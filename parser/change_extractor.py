@@ -31,6 +31,7 @@ STOP_MARKERS = (
     "изменения внес",
     "контрольную копию исправил",
 )
+DASH_ONLY_RE = re.compile(r"^[-–—]{1,3}$")
 
 
 def _compact_fragments(values: list[str | None]) -> list[str]:
@@ -85,7 +86,6 @@ def _find_table_anchor(sheet: Worksheet, max_scan_rows: int = 200) -> tuple[int 
     if izm_row is None:
         return None, None, None
 
-    # continuation sheets may have compact header where "Содержание изменения" may be omitted/truncated
     if content_row is None:
         content_row = izm_row
 
@@ -120,9 +120,29 @@ def _clean_body_line(line: str) -> str | None:
     if not cleaned:
         return None
     cleaned = cleaned.strip()
-    if cleaned in {"-", "--", "---"}:
+    if DASH_ONLY_RE.fullmatch(cleaned):
         return None
     return cleaned
+
+
+def _finalize_change_text(lines: list[str]) -> str | None:
+    if not lines:
+        return None
+
+    while lines and DASH_ONLY_RE.fullmatch(lines[0]):
+        lines.pop(0)
+    while lines and DASH_ONLY_RE.fullmatch(lines[-1]):
+        lines.pop()
+    if not lines:
+        return None
+
+    text = normalize_text("\n".join(lines))
+    if not text:
+        return None
+    text = re.sub(r"^[\s\n]*[-–—]{1,3}[\s\n]*", "", text)
+    text = re.sub(r"[\s\n]*[-–—]{1,3}[\s\n]*$", "", text)
+    text = normalize_text(text)
+    return text or None
 
 
 def extract_changes(
@@ -147,6 +167,10 @@ def extract_changes(
         "stop_markers_hit": 0,
         "blocks_closed_by_next_meta": 0,
         "blocks_closed_by_stop_marker": 0,
+        "first_block_detected": False,
+        "first_block_body_rows": 0,
+        "first_block_body_nonempty_cells": 0,
+        "first_block_closed_reason": None,
     }
 
     if table_data_start is None or idx_col is None:
@@ -186,30 +210,40 @@ def extract_changes(
     for seq_on_sheet, (start_row, change_index, doc_code) in enumerate(starts, start=1):
         nominal_end = starts[seq_on_sheet][0] - 1 if seq_on_sheet < len(starts) else sheet.max_row
         real_end = nominal_end
+        close_reason = "end_of_block"
 
         body_lines: list[str] = []
         prev_line = None
+        body_rows = 0
+        nonempty_cells = 0
+
         for row_idx in range(start_row, nominal_end + 1):
             if row_idx > start_row:
                 next_idx, next_doc = _extract_meta_signature(sheet, row_idx, idx_col)
                 if next_idx and next_doc:
                     real_end = row_idx - 1
+                    close_reason = "next_meta"
                     closed_by_next_meta += 1
                     break
 
             row_cells = _collect_row_cells(sheet, row_idx)
-            line = _row_text_from_cells(row_cells[idx_col:])
+            line_cells = row_cells[idx_col:]
+            nonempty_cells += sum(1 for c in line_cells if normalize_text(c))
+            line = _row_text_from_cells(line_cells)
             if not line:
                 continue
             if _is_stop_marker(line):
                 stop_hits += 1
                 closed_by_stop += 1
+                close_reason = "stop_marker"
                 real_end = row_idx - 1
                 break
             if _is_header_like(line):
                 continue
-            if DOC_CODE_RE.search(line) and row_idx == start_row:
-                continue
+
+            # For first row: keep inline body but remove doc_code token.
+            if row_idx == start_row:
+                line = DOC_CODE_RE.sub("", line).strip(" -—–")
 
             cleaned = _clean_body_line(line)
             if not cleaned:
@@ -218,6 +252,13 @@ def extract_changes(
                 continue
             body_lines.append(cleaned)
             prev_line = cleaned
+            body_rows += 1
+
+        if seq_on_sheet == 1:
+            debug_info["first_block_detected"] = True
+            debug_info["first_block_body_rows"] = body_rows
+            debug_info["first_block_body_nonempty_cells"] = nonempty_cells
+            debug_info["first_block_closed_reason"] = close_reason
 
         changes.append(
             ChangeBlock(
@@ -226,7 +267,7 @@ def extract_changes(
                 change_seq_on_sheet=seq_on_sheet,
                 change_index=change_index,
                 doc_code=doc_code,
-                change_text=normalize_text("\n".join(body_lines)),
+                change_text=_finalize_change_text(body_lines),
                 raw_meta_text=f"Изм. {change_index} {doc_code}",
                 zone_ref=ZoneRef(
                     meta_row_start=start_row,
