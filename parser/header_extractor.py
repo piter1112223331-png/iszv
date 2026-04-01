@@ -111,6 +111,27 @@ def _local_window_values(
     return values
 
 
+def _adjacent_cells_checked(
+    rows: list[tuple[int, list[str | None]]],
+    row_idx: int,
+    col_idx: int,
+    offsets: tuple[int, ...] = (1, 2),
+    include_next_row: bool = False,
+) -> list[str]:
+    checked: list[str] = []
+    row_jumps = (0, 1) if include_next_row else (0,)
+    for row_jump in row_jumps:
+        rix = row_idx + row_jump
+        if rix >= len(rows):
+            continue
+        row = rows[rix][1]
+        for off in offsets:
+            cix = col_idx + off
+            if 0 <= cix < len(row):
+                checked.append(normalize_text(row[cix]) or "")
+    return checked
+
+
 def _post_process_field(field: str, value: str | None, row_norm: list[str]) -> tuple[str | None, bool]:
     original = value
     value = normalize_dash_noise(value)
@@ -223,10 +244,10 @@ def _extract_sheet_number_local(rows: list[tuple[int, list[str | None]]], target
         return None, debug_info
     ridx, cidx, anchor_cell = anchor
     debug_info["anchor_cell"] = anchor_cell
-    window = _local_window_values(rows, ridx, cidx, offsets=(1, 2), include_next_row=True)
+    window = _adjacent_cells_checked(rows, ridx, cidx, offsets=(1, 2), include_next_row=False)
     debug_info["value_window"] = window
     for candidate in window:
-        if " " in candidate:
+        if not candidate or " " in candidate:
             continue
         val = safe_int(candidate)
         if val is None:
@@ -391,6 +412,9 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "distribution_dash_detected": False,
         "developer_final_serialized": None,
         "approvals_short_candidates_rejected": {},
+        "right_top_block_cells": {},
+        "distribution_cells": {},
+        "approvals_block_cells": {},
     }
     if sheet is None:
         debug["missing_fields"] = list(asdict(header).keys())
@@ -420,7 +444,15 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         ("applicability", ("применяемость",), True),
         ("distribution", ("разослать",), True),
     ):
-        candidate, local_dbg = _extract_header_field_local(rows, field, anchors, all_words=all_words, offsets=(1, 2), include_next_row=True)
+        candidate, local_dbg = _extract_header_field_local(
+            rows,
+            field,
+            anchors,
+            all_words=all_words,
+            offsets=(1, 2),
+            include_next_row=(field != "code"),
+            exact_anchor=(field == "code"),
+        )
         if field == "code":
             debug["code_local_zone_filtered"] = bool(local_dbg["value_window"])
         debug["header_anchor_cells"][field] = local_dbg["anchor_cell"]
@@ -437,6 +469,12 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
             "final_value": getattr(header, field),
             "collapsed_repeats_applied": collapsed,
         }
+        if field == "distribution":
+            debug["distribution_cells"] = {
+                "distribution_anchor_cell": local_dbg["anchor_cell"],
+                "distribution_value_cells_checked": local_dbg["value_window"],
+                "distribution_final_value": getattr(header, "distribution"),
+            }
 
     sheet_no_local, sheet_no_dbg = _extract_sheet_number_local(rows, "лист")
     debug["header_anchor_cells"]["sheet_no_declared"] = sheet_no_dbg["anchor_cell"]
@@ -516,6 +554,12 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
     debug["approvals_raw_candidates"] = appr_debug.get("approvals_raw_candidates", {})
     debug["approvals_final_candidates"] = asdict(approvals)
     debug["approvals_short_candidates_rejected"] = appr_debug.get("approvals_short_candidates_rejected", {})
+    debug["approvals_block_cells"] = {
+        "approval_anchor_cells": appr_debug.get("approval_anchor_cells", {}),
+        "approval_value_cells_checked": appr_debug.get("approvals_value_windows", {}),
+        "approvals_short_candidates_rejected": appr_debug.get("approvals_short_candidates_rejected", {}),
+        "approvals_final_candidates": asdict(approvals),
+    }
 
     fields = asdict(header)
     debug["found_fields"] = [k for k, v in fields.items() if v is not None]
@@ -531,5 +575,16 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
                 "collapsed_repeats_applied": False,
             }
     debug["developer_final_serialized"] = header.developer
+    debug["right_top_block_cells"] = {
+        "code_anchor_cell": debug.get("fields", {}).get("code", {}).get("anchor_cell"),
+        "code_value_cells_checked": debug.get("fields", {}).get("code", {}).get("value_window", []),
+        "code_final_value": header.code,
+        "sheet_no_anchor_cell": debug.get("fields", {}).get("sheet_no_declared", {}).get("anchor_cell"),
+        "sheet_no_value_cells_checked": debug.get("fields", {}).get("sheet_no_declared", {}).get("value_window", []),
+        "sheet_no_final_value": header.sheet_no_declared,
+        "sheet_total_anchor_cell": debug.get("fields", {}).get("sheet_total_declared", {}).get("anchor_cell"),
+        "sheet_total_value_cells_checked": debug.get("fields", {}).get("sheet_total_declared", {}).get("value_window", []),
+        "sheet_total_final_value": header.sheet_total_declared,
+    }
 
     return header, approvals, debug
