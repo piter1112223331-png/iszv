@@ -10,8 +10,8 @@ from parser.models import SheetLocalHeader, SheetResult
 from parser.normalizer import normalize_for_match, normalize_text, safe_int
 from parser.sheet_classifier import classify_sheet
 
-NOTICE_NUMBER_RE = re.compile(r"извещение\s*(?:об\s*изменении)?\s*№\s*([A-ZА-Я0-9][A-ZА-Я0-9\-/]{2,})", re.IGNORECASE)
-NOTICE_LINE_RE = re.compile(r"\b№\s*([A-ZА-Я0-9][A-ZА-Я0-9\-/]{2,})", re.IGNORECASE)
+NOTICE_NUMBER_RE = re.compile(r"извещение\s*(?:об\s*изменении)?\s*№\s*([A-ZА-Я0-9][A-ZА-Я0-9.\-/]{2,})", re.IGNORECASE)
+NOTICE_LINE_RE = re.compile(r"\b№\s*([A-ZА-Я0-9][A-ZА-Я0-9.\-/]{2,})", re.IGNORECASE)
 SHEET_RE = re.compile(r"лист\s*№?\s*(\d+)", re.IGNORECASE)
 INVALID_NOTICE_VALUES = {"извещение", "об изменении", "изменение"}
 
@@ -94,6 +94,7 @@ def parse_sheet(
         sheet,
         sheet_index=sheet_index,
         start_global_seq=start_global_seq,
+        sheet_kind=classification.kind,
     )
 
     result = SheetResult(

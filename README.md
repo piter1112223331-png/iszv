@@ -49,6 +49,12 @@ python -m parser.main "path/to/file.xlsx" --debug --pretty
 - `first_block_body_rows`
 - `first_block_body_nonempty_cells`
 - `first_block_closed_reason`
+- `first_block_inline_text_before_cleanup`
+- `first_block_inline_text_after_cleanup`
+- `first_block_candidate_body_lines`
+- `first_block_filtered_body_lines`
+- `first_block_fallback_used`
+- `first_block_final_text`
 
 ## Тесты
 

@@ -145,10 +145,39 @@ def _finalize_change_text(lines: list[str]) -> str | None:
     return text or None
 
 
+def _fallback_first_block_text(
+    sheet: Worksheet,
+    start_row: int,
+    end_row: int,
+    idx_col: int,
+) -> tuple[str | None, list[str], list[str]]:
+    candidates: list[str] = []
+    filtered: list[str] = []
+
+    for row_idx in range(start_row + 1, min(end_row, start_row + 3) + 1):
+        next_idx, next_doc = _extract_meta_signature(sheet, row_idx, idx_col)
+        if next_idx and next_doc:
+            break
+        line_cells = _collect_row_cells(sheet, row_idx)[idx_col:]
+        line = _row_text_from_cells(line_cells)
+        if not line:
+            continue
+        candidates.append(line)
+        if _is_stop_marker(line) or _is_header_like(line):
+            continue
+        cleaned = _clean_body_line(line)
+        if not cleaned:
+            continue
+        filtered.append(cleaned)
+
+    return _finalize_change_text(filtered), candidates, filtered
+
+
 def extract_changes(
     sheet: Worksheet,
     sheet_index: int,
     start_global_seq: int,
+    sheet_kind: str = "unknown",
 ) -> tuple[list[ChangeBlock], int, dict[str, object]]:
     table_data_start, idx_col, header_row = _find_table_anchor(sheet)
     debug_rejects = Counter()
@@ -171,6 +200,12 @@ def extract_changes(
         "first_block_body_rows": 0,
         "first_block_body_nonempty_cells": 0,
         "first_block_closed_reason": None,
+        "first_block_inline_text_before_cleanup": None,
+        "first_block_inline_text_after_cleanup": None,
+        "first_block_candidate_body_lines": [],
+        "first_block_filtered_body_lines": [],
+        "first_block_fallback_used": False,
+        "first_block_final_text": None,
     }
 
     if table_data_start is None or idx_col is None:
@@ -254,11 +289,40 @@ def extract_changes(
             prev_line = cleaned
             body_rows += 1
 
+        inline_before = None
+        inline_after = None
+        if seq_on_sheet == 1:
+            start_line_raw = _row_text_from_cells(_collect_row_cells(sheet, start_row)[idx_col:])
+            inline_before = start_line_raw
+            inline_after = DOC_CODE_RE.sub("", start_line_raw).strip(" -—–") if start_line_raw else None
+
+        final_text = _finalize_change_text(body_lines)
+        fallback_used = False
+        fallback_candidates: list[str] = []
+        fallback_filtered: list[str] = []
+
+        if seq_on_sheet == 1 and sheet_kind == "full" and not final_text:
+            fallback_text, fallback_candidates, fallback_filtered = _fallback_first_block_text(
+                sheet=sheet,
+                start_row=start_row,
+                end_row=nominal_end,
+                idx_col=idx_col,
+            )
+            if fallback_text:
+                fallback_used = True
+                final_text = fallback_text
+
         if seq_on_sheet == 1:
             debug_info["first_block_detected"] = True
             debug_info["first_block_body_rows"] = body_rows
             debug_info["first_block_body_nonempty_cells"] = nonempty_cells
             debug_info["first_block_closed_reason"] = close_reason
+            debug_info["first_block_inline_text_before_cleanup"] = inline_before
+            debug_info["first_block_inline_text_after_cleanup"] = inline_after
+            debug_info["first_block_candidate_body_lines"] = fallback_candidates
+            debug_info["first_block_filtered_body_lines"] = fallback_filtered
+            debug_info["first_block_fallback_used"] = fallback_used
+            debug_info["first_block_final_text"] = final_text
 
         changes.append(
             ChangeBlock(
@@ -267,7 +331,7 @@ def extract_changes(
                 change_seq_on_sheet=seq_on_sheet,
                 change_index=change_index,
                 doc_code=doc_code,
-                change_text=_finalize_change_text(body_lines),
+                change_text=final_text,
                 raw_meta_text=f"Изм. {change_index} {doc_code}",
                 zone_ref=ZoneRef(
                     meta_row_start=start_row,

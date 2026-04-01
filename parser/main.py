@@ -50,6 +50,12 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
                     f"first_block_body_rows={extraction_debug.get('first_block_body_rows')} "
                     f"first_block_body_nonempty_cells={extraction_debug.get('first_block_body_nonempty_cells')} "
                     f"first_block_closed_reason={extraction_debug.get('first_block_closed_reason')} "
+                    f"first_block_inline_text_before_cleanup={extraction_debug.get('first_block_inline_text_before_cleanup')} "
+                    f"first_block_inline_text_after_cleanup={extraction_debug.get('first_block_inline_text_after_cleanup')} "
+                    f"first_block_candidate_body_lines={extraction_debug.get('first_block_candidate_body_lines')} "
+                    f"first_block_filtered_body_lines={extraction_debug.get('first_block_filtered_body_lines')} "
+                    f"first_block_fallback_used={extraction_debug.get('first_block_fallback_used')} "
+                    f"first_block_final_text={extraction_debug.get('first_block_final_text')} "
                     f"notice_candidates={extraction_debug.get('notice_candidates')} "
                     f"rejected_notice_candidates={extraction_debug.get('rejected_notice_candidates')}"
                 ),
