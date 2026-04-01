@@ -111,7 +111,7 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
         print(f"[debug] header_validation_fields_checked={list(IMPORTANT_HEADER_FIELDS)}", file=sys.stderr)
         print(f"[debug] approvals_found={header_debug.get('approvals_found')} approvals_missing={header_debug.get('approvals_missing')}", file=sys.stderr)
         print(f"[debug] developer_candidate={header_debug.get('fields', {}).get('developer')} notice_number_candidate={header_debug.get('fields', {}).get('notice_number')} sheet_no_declared_candidate={header_debug.get('fields', {}).get('sheet_no_declared')} sheet_total_declared_candidate={header_debug.get('fields', {}).get('sheet_total_declared')} code_candidate={header_debug.get('fields', {}).get('code')}", file=sys.stderr)
-        print(f"[debug] approvals_candidates={header_debug.get('approvals_candidates')} approvals_rejected_reasons={header_debug.get('approvals_rejected_reasons')}", file=sys.stderr)
+        print(f"[debug] approvals_candidates={header_debug.get('approvals_candidates')} approvals_rejected_reasons={header_debug.get('approvals_rejected_reasons')} approvals_value_windows={header_debug.get('approvals_value_windows')}", file=sys.stderr)
         print(
             f"[debug] validation_errors={parsed_document.validation.errors} validation_warnings={parsed_document.validation.warnings}",
             file=sys.stderr,
