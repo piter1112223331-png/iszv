@@ -41,7 +41,13 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
                     f"table_header_row_start={extraction_debug.get('table_header_row_start')} "
                     f"potential_meta_rows={extraction_debug.get('potential_meta_rows')} "
                     f"rejected_meta_rows={extraction_debug.get('rejected_meta_rows')} "
-                    f"reject_reasons={extraction_debug.get('reject_reasons')}"
+                    f"reject_reasons={extraction_debug.get('reject_reasons')} "
+                    f"table_found={extraction_debug.get('table_found')} "
+                    f"stop_markers_hit={extraction_debug.get('stop_markers_hit')} "
+                    f"blocks_closed_by_next_meta={extraction_debug.get('blocks_closed_by_next_meta')} "
+                    f"blocks_closed_by_stop_marker={extraction_debug.get('blocks_closed_by_stop_marker')} "
+                    f"notice_candidates={extraction_debug.get('notice_candidates')} "
+                    f"rejected_notice_candidates={extraction_debug.get('rejected_notice_candidates')}"
                 ),
                 file=sys.stderr,
             )
