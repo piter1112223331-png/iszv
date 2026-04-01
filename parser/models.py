@@ -25,6 +25,9 @@ class ChangeBlock:
     change_text: str | None
     raw_meta_text: str | None
     zone_ref: ZoneRef = field(default_factory=ZoneRef)
+    has_doc_code: bool = False
+    has_change_text: bool = False
+    text_length: int = 0
 
 
 @dataclass
@@ -74,6 +77,11 @@ class ParsedDocument:
     sheets: list[SheetResult]
     all_changes: list[ChangeBlock]
     validation: ValidationResult
+    status: str | None = None
+    summary: dict = field(default_factory=dict)
+    llm_payload: dict = field(default_factory=dict)
+    flowis_payload: dict = field(default_factory=dict)
+    validation_details: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)

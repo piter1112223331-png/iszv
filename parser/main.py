@@ -7,6 +7,7 @@ from pathlib import Path
 
 from parser.header_extractor import extract_document_header
 from parser.models import ParsedDocument
+from parser.payloads import enrich_document
 from parser.sheet_parser import parse_sheet
 from parser.validator import IMPORTANT_HEADER_FIELDS, validate_document
 from parser.workbook_loader import WorkbookLoadError, load_xlsx
@@ -91,6 +92,7 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
         validation=None,
     )
     parsed_document.validation = validate_document(parsed_document)
+    parsed_document = enrich_document(parsed_document, header_debug=header_debug)
 
     if debug:
         print(
@@ -107,6 +109,10 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
             f"[debug] validation_errors={parsed_document.validation.errors} validation_warnings={parsed_document.validation.warnings}",
             file=sys.stderr,
         )
+        print(f"[debug] computed_status={parsed_document.status}", file=sys.stderr)
+        print(f"[debug] summary={parsed_document.summary}", file=sys.stderr)
+        print(f"[debug] llm_payload_preview={{'changes_count': {len(parsed_document.llm_payload.get('changes', []))}, 'summary': {parsed_document.llm_payload.get('summary')}}}", file=sys.stderr)
+        print(f"[debug] flowis_payload_preview={parsed_document.flowis_payload}", file=sys.stderr)
         print(f"[debug] candidate_sheets={candidate_sheets} all_changes={len(all_changes)}", file=sys.stderr)
 
     return parsed_document
