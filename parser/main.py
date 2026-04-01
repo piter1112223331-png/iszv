@@ -5,8 +5,10 @@ import json
 import sys
 from pathlib import Path
 
-from parser.models import DocumentHeader, ParsedDocument, ValidationResult
+from parser.header_extractor import extract_document_header
+from parser.models import ParsedDocument
 from parser.sheet_parser import parse_sheet
+from parser.validator import validate_document
 from parser.workbook_loader import WorkbookLoadError, load_xlsx
 
 
@@ -17,6 +19,7 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
     all_changes = []
     next_seq = 1
     candidate_sheets = 0
+    first_full_sheet = None
 
     for idx, sheet in enumerate(workbook.worksheets, start=1):
         parsed, next_seq, is_candidate, extraction_debug = parse_sheet(
@@ -28,6 +31,8 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
             candidate_sheets += 1
             parsed_sheets.append(parsed)
             all_changes.extend(parsed.changes)
+            if first_full_sheet is None and parsed.sheet_kind == "full":
+                first_full_sheet = sheet
 
         if debug:
             print(
@@ -72,24 +77,33 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
         if notice_number:
             break
 
-    validation = ValidationResult(template_detected=candidate_sheets > 0)
-    if candidate_sheets == 0:
-        validation.errors.append("No notice-like sheets were detected using MVP-1 markers")
+    document_header, header_debug = extract_document_header(first_full_sheet)
 
-    if debug:
-        print(f"[debug] candidate_sheets={candidate_sheets} all_changes={len(all_changes)}", file=sys.stderr)
-
-    return ParsedDocument(
+    parsed_document = ParsedDocument(
         document_type="change_notice",
         template_version="notice_multi_sheet_v1",
         source_file=Path(path).name,
         notice_number=notice_number,
         sheet_count_detected=len(parsed_sheets),
-        document_header=DocumentHeader(),
+        document_header=document_header,
         sheets=parsed_sheets,
         all_changes=all_changes,
-        validation=validation,
+        validation=None,
     )
+    parsed_document.validation = validate_document(parsed_document)
+
+    if debug:
+        print(
+            f"[debug] header_found={header_debug.get('found_fields')} header_missing={header_debug.get('missing_fields')}",
+            file=sys.stderr,
+        )
+        print(
+            f"[debug] validation_errors={parsed_document.validation.errors} validation_warnings={parsed_document.validation.warnings}",
+            file=sys.stderr,
+        )
+        print(f"[debug] candidate_sheets={candidate_sheets} all_changes={len(all_changes)}", file=sys.stderr)
+
+    return parsed_document
 
 
 def build_cli() -> argparse.ArgumentParser:
