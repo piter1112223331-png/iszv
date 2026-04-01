@@ -8,6 +8,24 @@ python -m parser.main "path/to/file.xlsx" --output result.json
 python -m parser.main "path/to/file.xlsx" --debug --pretty
 ```
 
+## Flowis integration (CLI)
+
+По умолчанию отправляется `llm_payload` (не full JSON):
+
+```bash
+python -m parser.main "1.xlsx" --pretty --send-flowis --flowis-url "http://localhost:3000/api/v1/prediction/..."
+python -m parser.main "1.xlsx" --send-flowis --flowis-payload flowis --flowis-save-response flowis_response.json
+```
+
+Опции:
+- `--send-flowis` — отправить payload в Flowis после обычного парсинга
+- `--flowis-url` — endpoint URL (если не указан, используется `FLOWIS_API_URL`)
+- `--flowis-payload {llm,flowis,full}` — какой слой отправлять, default: `llm`
+- `--flowis-timeout <sec>` — timeout запроса, default: `180`
+- `--flowis-save-response <path>` — сохранить JSON-ответ Flowis в файл
+
+Если `--flowis-url` и `FLOWIS_API_URL` отсутствуют, CLI завершится с понятной ошибкой.
+
 ## MVP-3+ business attributes
 
 `document_header` расширен полями формы:

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
+from parser.flowis_client import build_flowis_request_body, send_to_flowis
 from parser.header_extractor import extract_document_header
 from parser.models import ParsedDocument
 from parser.payloads import enrich_document
@@ -132,7 +134,26 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--indent", type=int, default=2, help="JSON indent")
     parser.add_argument("--pretty", action="store_true", help="Pretty JSON output with indent=2")
     parser.add_argument("--debug", action="store_true", help="Print diagnostic info to stderr")
+    parser.add_argument("--send-flowis", action="store_true", help="Send payload to Flowis after parsing")
+    parser.add_argument("--flowis-url", help="Flowis endpoint URL (or use FLOWIS_API_URL env)")
+    parser.add_argument("--flowis-payload", choices=("llm", "flowis", "full"), default="llm", help="Payload layer to send")
+    parser.add_argument("--flowis-timeout", type=int, default=180, help="Flowis request timeout in seconds")
+    parser.add_argument("--flowis-save-response", help="Path to save raw JSON response from Flowis")
     return parser
+
+
+def _resolve_flowis_url(cli_value: str | None) -> str:
+    return cli_value or os.environ.get("FLOWIS_API_URL", "")
+
+
+def _select_payload(result: ParsedDocument, payload_kind: str) -> dict:
+    if payload_kind == "llm":
+        return result.llm_payload
+    if payload_kind == "flowis":
+        return result.flowis_payload
+    if payload_kind == "full":
+        return result.to_dict()
+    raise ValueError(f"Unsupported payload kind: {payload_kind}")
 
 
 def main() -> int:
@@ -151,6 +172,28 @@ def main() -> int:
         Path(args.output).write_text(payload + "\n", encoding="utf-8")
     else:
         print(payload)
+
+    if args.send_flowis:
+        flowis_url = _resolve_flowis_url(args.flowis_url)
+        if not flowis_url:
+            print("Flowis URL is missing. Use --flowis-url or FLOWIS_API_URL.", file=sys.stderr)
+            return 2
+        selected_payload = _select_payload(result, args.flowis_payload)
+        request_body = build_flowis_request_body(selected_payload, mode="question_json")
+        try:
+            response_data = send_to_flowis(flowis_url, request_body, timeout_sec=args.flowis_timeout)
+        except RuntimeError as exc:
+            print(f"Flowis send failed: {exc}", file=sys.stderr)
+            return 1
+
+        print("Flowis request sent")
+        print(f"payload type: {args.flowis_payload}")
+        if args.flowis_save_response:
+            response_path = Path(args.flowis_save_response)
+            response_path.write_text(json.dumps(response_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(f"response saved to {response_path}")
+        elif args.pretty:
+            print(json.dumps(response_data, ensure_ascii=False, indent=2))
 
     return 0
 
