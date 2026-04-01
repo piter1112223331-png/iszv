@@ -62,6 +62,7 @@ HEADER_NOISE_MARKERS = (
     "т. контроль",
     "предст. заказ",
 )
+ORG_PREFIXES = ("АО", "ООО", "ПАО")
 APPROVAL_ANCHORS = {
     "author": ("составил",),
     "reviewer": ("проверил",),
@@ -84,6 +85,30 @@ def _extract_right_zone(row_values: list[str | None], anchor_col: int, width: in
     cells = row_values[anchor_col : anchor_col + width]
     parts = [normalize_text(v) for v in cells if normalize_text(v) and not _is_label_like(v)]
     return normalize_text(" ".join(parts)) if parts else None
+
+
+def _local_window_values(
+    rows: list[tuple[int, list[str | None]]],
+    row_idx: int,
+    anchor_col_idx: int,
+    offsets: tuple[int, ...] = (1, 2),
+    include_next_row: bool = True,
+) -> list[str]:
+    values: list[str] = []
+    row_jumps = (0, 1) if include_next_row else (0,)
+    for row_jump in row_jumps:
+        target_idx = row_idx + row_jump
+        if target_idx >= len(rows):
+            continue
+        row = rows[target_idx][1]
+        for off in offsets:
+            col_idx = anchor_col_idx + off
+            if col_idx < 0 or col_idx >= len(row):
+                continue
+            val = normalize_text(row[col_idx])
+            if val:
+                values.append(val)
+    return values
 
 
 def _post_process_field(field: str, value: str | None, row_norm: list[str]) -> tuple[str | None, bool]:
@@ -133,45 +158,76 @@ def _sanitize_candidate(field: str, raw: str | None, row_norm: list[str]) -> tup
     return processed, None, collapsed
 
 
-def _extract_code_dedicated(rows: list[tuple[int, list[str | None]]]) -> tuple[str | None, list[str]]:
-    candidates: list[tuple[int, str]] = []
-    windows: list[str] = []
-    for _, row in rows[:80]:
+def _find_header_anchor(
+    rows: list[tuple[int, list[str | None]]],
+    anchors: tuple[str, ...],
+    *,
+    top_rows: int = 80,
+    all_words: bool = True,
+) -> tuple[int, int, str] | None:
+    for ridx, (excel_row, row) in enumerate(rows[:top_rows]):
         norm_cells = [normalize_for_match(v) for v in row]
-        row_has_sheet = any("лист" in c for c in norm_cells)
-        for col_idx, c in enumerate(norm_cells):
-            if c != "код":
+        for cidx, cell_norm in enumerate(norm_cells):
+            if not cell_norm:
                 continue
-            val = normalize_text(row[col_idx + 1] if col_idx + 1 < len(row) else None)
-            if not val:
-                continue
-            windows.append(val)
-            if re.fullmatch(r"\d+", val):
-                score = 1 if row_has_sheet else 2
-                candidates.append((score, val))
-            elif not _is_label_like(val):
-                candidates.append((1, val))
-    if not candidates:
-        return None, windows
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1], windows
+            matched = all(a in cell_norm for a in anchors) if all_words else any(a in cell_norm for a in anchors)
+            if matched:
+                return ridx, cidx, f"R{excel_row}C{cidx + 1}"
+    return None
 
 
-def _extract_dash_field(rows: list[tuple[int, list[str | None]]], label: str) -> tuple[str | None, list[str]]:
-    windows: list[str] = []
-    for _, row in rows[:120]:
-        norm = [normalize_for_match(v) for v in row]
-        for col_idx, c in enumerate(norm):
-            if label not in c:
+def _extract_header_field_local(
+    rows: list[tuple[int, list[str | None]]],
+    field: str,
+    anchors: tuple[str, ...],
+    *,
+    all_words: bool = True,
+    offsets: tuple[int, ...] = (1, 2),
+    include_next_row: bool = True,
+) -> tuple[str | None, dict[str, object]]:
+    debug_info: dict[str, object] = {"anchor_cell": None, "value_window": [], "raw_candidate": None}
+    anchor = _find_header_anchor(rows, anchors, top_rows=80, all_words=all_words)
+    if not anchor:
+        return None, debug_info
+    ridx, cidx, anchor_cell = anchor
+    debug_info["anchor_cell"] = anchor_cell
+    window = _local_window_values(rows, ridx, cidx, offsets=offsets, include_next_row=include_next_row)
+    debug_info["value_window"] = window
+    for candidate in window:
+        if _is_label_like(candidate):
+            continue
+        if field == "code":
+            # exclude sheet counters caught near "Лист/Листов"
+            if not re.fullmatch(r"\d+", candidate):
                 continue
-            for off in (1, 2):
-                if col_idx + off < len(row):
-                    val = normalize_text(row[col_idx + off])
-                    if val:
-                        windows.append(val)
-                        if val in {"-", "—", "–"}:
-                            return "-", windows
-    return None, windows
+            left_ctx = normalize_for_match(rows[ridx][1][max(0, cidx - 1)] if cidx > 0 else None)
+            if "лист" in left_ctx:
+                continue
+        if field == "developer" and not any(candidate.startswith(prefix) for prefix in ORG_PREFIXES):
+            continue
+        debug_info["raw_candidate"] = candidate
+        return candidate, debug_info
+    return None, debug_info
+
+
+def _extract_sheet_number_local(rows: list[tuple[int, list[str | None]]], target: str) -> tuple[int | None, dict[str, object]]:
+    debug_info: dict[str, object] = {"anchor_cell": None, "value_window": [], "raw_candidate": None}
+    anchor = _find_header_anchor(rows, (target,), top_rows=80, all_words=False)
+    if not anchor:
+        return None, debug_info
+    ridx, cidx, anchor_cell = anchor
+    debug_info["anchor_cell"] = anchor_cell
+    window = _local_window_values(rows, ridx, cidx, offsets=(1, 2), include_next_row=True)
+    debug_info["value_window"] = window
+    for candidate in window:
+        if " " in candidate:
+            continue
+        val = safe_int(candidate)
+        if val is None:
+            continue
+        debug_info["raw_candidate"] = candidate
+        return val, debug_info
+    return None, debug_info
 
 
 def _extract_sheet_numbers(rows: list[tuple[int, list[str | None]]]) -> tuple[int | None, int | None, dict[str, object]]:
@@ -254,29 +310,29 @@ def _extract_sheet_total_declared(rows: list[tuple[int, list[str | None]]]) -> t
 
 
 def _extract_approval_value(rows: list[tuple[int, list[str | None]]], row_idx: int, anchor_col: int) -> tuple[str | None, str | None, list[str]]:
-    # strict right-side window + one-row-below fallback in approval block
-    values: list[str] = []
-    for delta_row in (0, 1):
-        if row_idx + delta_row >= len(rows):
+    values = _local_window_values(rows, row_idx, anchor_col - 1, offsets=(1, 2, 3), include_next_row=True)
+    for cand in values:
+        cand_norm = normalize_for_match(cand)
+        if _is_label_like(cand) or "контроль" in cand_norm or "предст" in cand_norm:
             continue
-        row = rows[row_idx + delta_row][1]
-        window = [normalize_text(row[i]) for i in range(anchor_col, min(len(row), anchor_col + 3))]
-        values.extend([c for c in window if c])
-        for cand in window:
-            if not cand:
-                continue
-            cand_norm = normalize_for_match(cand)
-            if _is_label_like(cand) or "контроль" in cand_norm or "предст" in cand_norm:
-                continue
-            return cand, None, values
+        return cand, None, values
     return None, ("label_like" if values else "empty"), values
 
 
 def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approvals, dict[str, object]]:
     approvals = Approvals()
-    debug = {"found": [], "missing": [], "approvals_candidates": {}, "approvals_rejected_reasons": {}}
+    debug = {
+        "found": [],
+        "missing": [],
+        "approvals_candidates": {},
+        "approvals_rejected_reasons": {},
+        "approval_block_detected": False,
+        "approval_anchor_cells": {},
+        "approvals_raw_candidates": {},
+    }
     tail = rows[max(0, len(rows) - 80) :]
 
+    anchor_hits = 0
     for ridx, (_, row) in enumerate(tail):
         norm_row = [normalize_for_match(v) for v in row]
         for field, anchors in APPROVAL_ANCHORS.items():
@@ -284,14 +340,18 @@ def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approv
                 continue
             for col_idx, text in enumerate(norm_row, start=1):
                 if text and all(a in text for a in anchors):
+                    debug["approval_anchor_cells"][field] = f"R{tail[ridx][0]}C{col_idx}"
+                    anchor_hits += 1
                     val, reason, window = _extract_approval_value(tail, ridx, col_idx)
                     debug["approvals_candidates"][field] = normalize_text(row[col_idx] if col_idx < len(row) else None)
                     debug.setdefault("approvals_value_windows", {})[field] = window
+                    debug["approvals_raw_candidates"][field] = val
                     if val:
                         setattr(approvals, field, val)
                     else:
                         debug["approvals_rejected_reasons"][field] = reason
                     break
+    debug["approval_block_detected"] = anchor_hits >= 2
 
     for k, v in asdict(approvals).items():
         (debug["found"] if v else debug["missing"]).append(k)
@@ -312,14 +372,7 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "approvals_candidates": {},
         "approvals_rejected_reasons": {},
         "approvals_value_windows": {},
-        "developer_search_window": [],
-        "code_search_window": [],
-        "sheet_no_declared_search_window": [],
-        "sheet_no_value_window": [],
-        "code_value_window": [],
-        "dash_field_value_windows": {},
-        "approvals_value_windows_expanded": {},
-        "approvals_final_candidates": {},
+        "header_anchor_cells": {},
     }
     if sheet is None:
         debug["missing_fields"] = list(asdict(header).keys())
@@ -333,8 +386,6 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
     sheet_total, sheet_total_debug = _extract_sheet_total_declared(rows)
     header.sheet_total_declared = sheet_total if sheet_total is not None else sheet_total_hint
     debug["fields"]["sheet_total_declared"] = sheet_total_debug
-    debug["sheet_no_declared_search_window"] = sheet_dbg.get("sheet_no_declared_search_window", [])
-    debug["sheet_no_value_window"] = [sheet_dbg.get("sheet_no_declared_candidate")] if sheet_dbg.get("sheet_no_declared_candidate") is not None else []
     debug["fields"]["sheet_no_declared"] = {
         "raw_candidate": sheet_dbg.get("sheet_no_declared_candidate"),
         "cleaned_candidate": sheet_dbg.get("sheet_no_declared_candidate"),
@@ -343,30 +394,60 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "collapsed_repeats_applied": False,
     }
 
-    code_val, code_windows = _extract_code_dedicated(rows)
-    if code_val is not None:
-        header.code = code_val
-        debug["fields"]["code"] = {"raw_candidate": code_val, "cleaned_candidate": code_val, "rejected_reason": None, "final_value": code_val, "collapsed_repeats_applied": False}
-        debug["normalized_header_fields"]["code"] = code_val
-    debug["code_value_window"] = code_windows
+    # strict local-zone extraction for unstable business fields
+    for field, anchors, all_words in (
+        ("developer", HEADER_ANCHORS["developer"], False),
+        ("code", ("код",), True),
+        ("implementation_instruction", ("указания о внедрении", "указание о внедрении"), False),
+        ("applicability", ("применяемость",), True),
+        ("distribution", ("разослать",), True),
+    ):
+        candidate, local_dbg = _extract_header_field_local(rows, field, anchors, all_words=all_words, offsets=(1, 2), include_next_row=True)
+        debug["header_anchor_cells"][field] = local_dbg["anchor_cell"]
+        cleaned_candidate, reject_reason, collapsed = _sanitize_candidate(field, candidate, [])
+        if cleaned_candidate is not None and reject_reason is None:
+            setattr(header, field, cleaned_candidate)
+            debug["normalized_header_fields"][field] = cleaned_candidate
+        debug["fields"][field] = {
+            "anchor_cell": local_dbg["anchor_cell"],
+            "value_window": local_dbg["value_window"],
+            "raw_candidate": local_dbg["raw_candidate"],
+            "cleaned_candidate": cleaned_candidate,
+            "rejected_reason": reject_reason if local_dbg["anchor_cell"] else "anchor_not_found",
+            "final_value": getattr(header, field),
+            "collapsed_repeats_applied": collapsed,
+        }
 
-    for fld, lbl in (("implementation_instruction", "указания о внедрении"), ("applicability", "применяемость"), ("distribution", "разослать")):
-        dash_val, dash_windows = _extract_dash_field(rows, lbl)
-        debug["dash_field_value_windows"][fld] = dash_windows
-        if dash_val is not None:
-            setattr(header, fld, dash_val)
-            debug["normalized_header_fields"][fld] = dash_val
-            debug["fields"][fld] = {"raw_candidate": dash_val, "cleaned_candidate": dash_val, "rejected_reason": None, "final_value": dash_val, "collapsed_repeats_applied": False}
+    sheet_no_local, sheet_no_dbg = _extract_sheet_number_local(rows, "лист")
+    debug["header_anchor_cells"]["sheet_no_declared"] = sheet_no_dbg["anchor_cell"]
+    if sheet_no_local is not None:
+        header.sheet_no_declared = sheet_no_local
+    debug["fields"]["sheet_no_declared"] = {
+        "anchor_cell": sheet_no_dbg["anchor_cell"],
+        "value_window": sheet_no_dbg["value_window"],
+        "raw_candidate": sheet_no_dbg["raw_candidate"],
+        "cleaned_candidate": sheet_no_dbg["raw_candidate"],
+        "rejected_reason": None if header.sheet_no_declared is not None else "not_found",
+        "final_value": header.sheet_no_declared,
+        "collapsed_repeats_applied": False,
+    }
+
+    sheet_total_local, sheet_total_local_dbg = _extract_sheet_number_local(rows, "листов")
+    debug["header_anchor_cells"]["sheet_total_declared"] = sheet_total_local_dbg["anchor_cell"]
+    if sheet_total_local is not None:
+        header.sheet_total_declared = sheet_total_local
+        debug["fields"]["sheet_total_declared"]["final_value"] = sheet_total_local
+        debug["fields"]["sheet_total_declared"]["raw_candidate"] = sheet_total_local_dbg["raw_candidate"]
+        debug["fields"]["sheet_total_declared"]["cleaned_candidate"] = sheet_total_local_dbg["raw_candidate"]
+        debug["fields"]["sheet_total_declared"]["rejected_reason"] = None
+    debug["fields"]["sheet_total_declared"]["anchor_cell"] = sheet_total_local_dbg["anchor_cell"]
+    debug["fields"]["sheet_total_declared"]["value_window"] = sheet_total_local_dbg["value_window"]
 
     for i, (_, row_values) in enumerate(rows[:80]):
         row_norm = [normalize_for_match(v) for v in row_values]
         row_txt = normalize_text(" ".join(v for v in row_values if v))
-        if row_txt:
-            debug["developer_search_window"].append(row_txt)
-            debug["code_search_window"].append(row_txt)
-
         for field, anchors in HEADER_ANCHORS.items():
-            if field in {"sheet_no_declared", "code", "implementation_instruction", "applicability", "distribution"} or getattr(header, field) is not None:
+            if field in {"developer", "sheet_no_declared", "sheet_total_declared", "code", "implementation_instruction", "applicability", "distribution"} or getattr(header, field) is not None:
                 continue
             for col_idx, norm in enumerate(row_norm, start=1):
                 if not norm:
@@ -401,24 +482,15 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
                     continue
                 break
 
-    if header.developer is None:
-        for _, row in rows[:30]:
-            for cell in row:
-                text = normalize_text(cell)
-                if text and (('АО "' in text) or ('ООО' in text) or ('ПАО' in text)):
-                    header.developer = text
-                    debug["fields"]["developer"] = {"raw_candidate": text, "cleaned_candidate": text, "rejected_reason": None, "final_value": text, "collapsed_repeats_applied": False}
-                    debug["normalized_header_fields"]["developer"] = text
-                    break
-            if header.developer:
-                break
-
     approvals, appr_debug = _extract_approvals(rows)
     debug["approvals_found"] = appr_debug["found"]
     debug["approvals_missing"] = appr_debug["missing"]
     debug["approvals_candidates"] = appr_debug["approvals_candidates"]
     debug["approvals_rejected_reasons"] = appr_debug["approvals_rejected_reasons"]
-    debug["approvals_value_windows_expanded"] = appr_debug.get("approvals_value_windows", {})
+    debug["approval_block_detected"] = appr_debug.get("approval_block_detected", False)
+    debug["approval_anchor_cells"] = appr_debug.get("approval_anchor_cells", {})
+    debug["approvals_value_windows"] = appr_debug.get("approvals_value_windows", {})
+    debug["approvals_raw_candidates"] = appr_debug.get("approvals_raw_candidates", {})
     debug["approvals_final_candidates"] = asdict(approvals)
 
     fields = asdict(header)
