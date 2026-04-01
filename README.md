@@ -43,6 +43,8 @@ python -m parser.main "path/to/file.xlsx" --debug --pretty
 - header field diagnostics
 - approvals_found / approvals_missing
 - developer/notice/code/sheet_no candidates
+- sheet_total_declared_candidate
+- approvals_candidates / approvals_rejected_reasons
 - computed_status
 - summary
 - llm_payload_preview

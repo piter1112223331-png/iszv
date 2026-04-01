@@ -30,7 +30,7 @@ HEADER_ANCHORS = {
     "distribution": ("разослать",),
 }
 FIELD_WIDTH = {
-    "developer": 3,
+    "developer": 4,
     "notice_number": 2,
     "reason": 3,
     "code": 1,
@@ -55,6 +55,10 @@ HEADER_NOISE_MARKERS = (
     "применяемость",
     "разослать",
     "извещение",
+    "составил",
+    "проверил",
+    "н. контроль",
+    "утвердил",
 )
 APPROVAL_ANCHORS = {
     "author": ("составил",),
@@ -80,15 +84,19 @@ def _extract_right_zone(row_values: list[str | None], anchor_col: int, width: in
     return normalize_text(" ".join(parts)) if parts else None
 
 
-def _post_process_field(field: str, value: str | None) -> tuple[str | None, bool]:
+def _post_process_field(field: str, value: str | None, row_norm: list[str]) -> tuple[str | None, bool]:
     original = value
     value = normalize_dash_noise(value)
     value = collapse_repeated_tokens(value)
     if field in {"reason", "stock_instruction", "implementation_instruction", "applicability", "distribution"}:
         value = collapse_repeated_phrases(value)
 
-    if field == "code" and value and re.fullmatch(r"\d+(\s+\d+)*", value):
-        value = value.split()[0] if len(value.split()) == 1 else None
+    if field == "code" and value:
+        if re.fullmatch(r"\d+(\s+\d+)*", value):
+            if any("лист" in t for t in row_norm):
+                value = None
+            else:
+                value = value.split()[0]
     if field == "release_date" and value and not DATE_RE.search(value):
         value = None
     if field == "notice_number":
@@ -104,10 +112,13 @@ def _post_process_field(field: str, value: str | None) -> tuple[str | None, bool
     return value, value != original
 
 
-def _sanitize_candidate(field: str, raw: str | None) -> tuple[str | None, str | None, bool]:
+def _sanitize_candidate(field: str, raw: str | None, row_norm: list[str]) -> tuple[str | None, str | None, bool]:
     cleaned = normalize_text(raw)
     if not cleaned:
         return None, "empty", False
+
+    if field in {"implementation_instruction", "applicability", "distribution"} and cleaned in {"-", "—", "–"}:
+        return "-", None, False
 
     norm = normalize_for_match(cleaned)
     if _is_label_like(cleaned) and len(cleaned.split()) <= 8:
@@ -117,10 +128,39 @@ def _sanitize_candidate(field: str, raw: str | None) -> tuple[str | None, str | 
     if not meaningful and not any(ch.isdigit() for ch in cleaned):
         return None, "no_meaningful_tokens", False
 
-    processed, collapsed = _post_process_field(field, cleaned)
+    processed, collapsed = _post_process_field(field, cleaned, row_norm)
     if processed is None:
         return None, "postprocess_rejected", collapsed
     return processed, None, collapsed
+
+
+def _extract_sheet_numbers(rows: list[tuple[int, list[str | None]]]) -> tuple[int | None, int | None, dict[str, object]]:
+    dbg = {"sheet_no_declared_candidate": None, "sheet_total_declared_candidate": None}
+    sheet_no = None
+    sheet_total = None
+
+    for _, row in rows[:80]:
+        norm_cells = [normalize_for_match(v) for v in row]
+        if not any("листов" in c for c in norm_cells):
+            continue
+        for col_idx, c in enumerate(norm_cells):
+            if "листов" in c:
+                right = safe_int(normalize_text(row[col_idx + 1] if col_idx + 1 < len(row) else None))
+                if right:
+                    sheet_total = right
+                    dbg["sheet_total_declared_candidate"] = right
+        # look explicit "лист" but not "листов"
+        for col_idx, c in enumerate(norm_cells):
+            if c == "лист" or c.startswith("лист "):
+                right = safe_int(normalize_text(row[col_idx + 1] if col_idx + 1 < len(row) else None))
+                if right:
+                    sheet_no = right
+                    dbg["sheet_no_declared_candidate"] = right
+                    break
+        if sheet_no is not None and sheet_total is not None:
+            break
+
+    return sheet_no, sheet_total, dbg
 
 
 def _extract_sheet_total_declared(rows: list[tuple[int, list[str | None]]]) -> tuple[int | None, dict[str, object]]:
@@ -159,9 +199,20 @@ def _extract_sheet_total_declared(rows: list[tuple[int, list[str | None]]]) -> t
     return None, debug
 
 
+def _extract_approval_value(row: list[str | None], anchor_col: int) -> tuple[str | None, str | None]:
+    candidates = [normalize_text(row[i]) for i in range(anchor_col, min(len(row), anchor_col + 4))]
+    for cand in candidates:
+        if not cand:
+            continue
+        if _is_label_like(cand):
+            return None, "label_like"
+        return cand, None
+    return None, "empty"
+
+
 def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approvals, dict[str, object]]:
     approvals = Approvals()
-    debug = {"found": [], "missing": []}
+    debug = {"found": [], "missing": [], "approvals_candidates": {}, "approvals_rejected_reasons": {}}
     tail = rows[max(0, len(rows) - 80) :]
 
     for _, row in tail:
@@ -171,9 +222,12 @@ def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approv
                 continue
             for col_idx, text in enumerate(norm_row, start=1):
                 if text and all(a in text for a in anchors):
-                    val = _extract_right_zone(row, col_idx, 2)
+                    val, reason = _extract_approval_value(row, col_idx)
+                    debug["approvals_candidates"][field] = normalize_text(row[col_idx] if col_idx < len(row) else None)
                     if val:
                         setattr(approvals, field, val)
+                    else:
+                        debug["approvals_rejected_reasons"][field] = reason
                     break
 
     for k, v in asdict(approvals).items():
@@ -192,6 +246,8 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "collapsed_repeats_applied": [],
         "approvals_found": [],
         "approvals_missing": [],
+        "approvals_candidates": {},
+        "approvals_rejected_reasons": {},
     }
     if sheet is None:
         debug["missing_fields"] = list(asdict(header).keys())
@@ -199,36 +255,44 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
 
     rows = list(iter_sheet_rows(sheet))[:180]
 
+    sheet_no, sheet_total_hint, sheet_dbg = _extract_sheet_numbers(rows)
+    if sheet_no is not None:
+        header.sheet_no_declared = sheet_no
     sheet_total, sheet_total_debug = _extract_sheet_total_declared(rows)
-    header.sheet_total_declared = sheet_total
+    header.sheet_total_declared = sheet_total if sheet_total is not None else sheet_total_hint
     debug["fields"]["sheet_total_declared"] = sheet_total_debug
+    debug["fields"]["sheet_no_declared"] = {
+        "raw_candidate": sheet_dbg.get("sheet_no_declared_candidate"),
+        "cleaned_candidate": sheet_dbg.get("sheet_no_declared_candidate"),
+        "rejected_reason": None if sheet_no is not None else "not_found",
+        "final_value": header.sheet_no_declared,
+        "collapsed_repeats_applied": False,
+    }
 
-    for i, (_, row_values) in enumerate(rows):
+    for i, (_, row_values) in enumerate(rows[:80]):
         row_norm = [normalize_for_match(v) for v in row_values]
 
         for field, anchors in HEADER_ANCHORS.items():
-            if getattr(header, field) is not None:
+            if field == "sheet_no_declared" or getattr(header, field) is not None:
                 continue
             for col_idx, norm in enumerate(row_norm, start=1):
-                if not norm or not all(anchor in norm for anchor in anchors):
+                if not norm:
                     continue
-                if field == "sheet_no_declared" and "листов" in norm:
-                    continue
+                if field == "developer":
+                    if not any(a in norm for a in anchors):
+                        continue
+                else:
+                    if not all(anchor in norm for anchor in anchors):
+                        continue
 
                 width = FIELD_WIDTH.get(field, 3)
                 raw_candidate = _extract_right_zone(row_values, col_idx, width)
                 if not raw_candidate and i + 1 < len(rows):
                     raw_candidate = _extract_right_zone(rows[i + 1][1], col_idx, width)
 
-                cleaned_candidate, reject_reason, collapsed = _sanitize_candidate(field, raw_candidate)
-                if field in {"sheet_no_declared"}:
-                    cleaned_candidate = str(safe_int(cleaned_candidate)) if cleaned_candidate and safe_int(cleaned_candidate) else None
-                    reject_reason = reject_reason or (None if cleaned_candidate else "postprocess_rejected")
+                cleaned_candidate, reject_reason, collapsed = _sanitize_candidate(field, raw_candidate, row_norm)
                 if reject_reason is None and cleaned_candidate:
-                    if field == "sheet_no_declared":
-                        setattr(header, field, safe_int(cleaned_candidate))
-                    else:
-                        setattr(header, field, cleaned_candidate)
+                    setattr(header, field, cleaned_candidate)
                     debug["normalized_header_fields"][field] = getattr(header, field)
 
                 debug["fields"][field] = {
@@ -245,6 +309,8 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
     approvals, appr_debug = _extract_approvals(rows)
     debug["approvals_found"] = appr_debug["found"]
     debug["approvals_missing"] = appr_debug["missing"]
+    debug["approvals_candidates"] = appr_debug["approvals_candidates"]
+    debug["approvals_rejected_reasons"] = appr_debug["approvals_rejected_reasons"]
 
     fields = asdict(header)
     debug["found_fields"] = [k for k, v in fields.items() if v is not None]
