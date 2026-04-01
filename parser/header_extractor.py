@@ -133,6 +133,47 @@ def _sanitize_candidate(field: str, raw: str | None, row_norm: list[str]) -> tup
     return processed, None, collapsed
 
 
+def _extract_code_dedicated(rows: list[tuple[int, list[str | None]]]) -> tuple[str | None, list[str]]:
+    candidates: list[tuple[int, str]] = []
+    windows: list[str] = []
+    for _, row in rows[:80]:
+        norm_cells = [normalize_for_match(v) for v in row]
+        row_has_sheet = any("лист" in c for c in norm_cells)
+        for col_idx, c in enumerate(norm_cells):
+            if c != "код":
+                continue
+            val = normalize_text(row[col_idx + 1] if col_idx + 1 < len(row) else None)
+            if not val:
+                continue
+            windows.append(val)
+            if re.fullmatch(r"\d+", val):
+                score = 1 if row_has_sheet else 2
+                candidates.append((score, val))
+            elif not _is_label_like(val):
+                candidates.append((1, val))
+    if not candidates:
+        return None, windows
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1], windows
+
+
+def _extract_dash_field(rows: list[tuple[int, list[str | None]]], label: str) -> tuple[str | None, list[str]]:
+    windows: list[str] = []
+    for _, row in rows[:120]:
+        norm = [normalize_for_match(v) for v in row]
+        for col_idx, c in enumerate(norm):
+            if label not in c:
+                continue
+            for off in (1, 2):
+                if col_idx + off < len(row):
+                    val = normalize_text(row[col_idx + off])
+                    if val:
+                        windows.append(val)
+                        if val in {"-", "—", "–"}:
+                            return "-", windows
+    return None, windows
+
+
 def _extract_sheet_numbers(rows: list[tuple[int, list[str | None]]]) -> tuple[int | None, int | None, dict[str, object]]:
     dbg = {"sheet_no_declared_candidate": None, "sheet_total_declared_candidate": None, "sheet_no_declared_search_window": []}
     sheet_no = None
@@ -212,19 +253,23 @@ def _extract_sheet_total_declared(rows: list[tuple[int, list[str | None]]]) -> t
     return None, debug
 
 
-def _extract_approval_value(row: list[str | None], anchor_col: int) -> tuple[str | None, str | None, list[str]]:
-    # strict right-side window to avoid service columns (e.g. Т. контроль, Предст. заказ.)
-    window = [normalize_text(row[i]) for i in range(anchor_col, min(len(row), anchor_col + 2))]
-    saw_label_like = False
-    for cand in window:
-        if not cand:
+def _extract_approval_value(rows: list[tuple[int, list[str | None]]], row_idx: int, anchor_col: int) -> tuple[str | None, str | None, list[str]]:
+    # strict right-side window + one-row-below fallback in approval block
+    values: list[str] = []
+    for delta_row in (0, 1):
+        if row_idx + delta_row >= len(rows):
             continue
-        cand_norm = normalize_for_match(cand)
-        if _is_label_like(cand) or "контроль" in cand_norm or "предст" in cand_norm:
-            saw_label_like = True
-            continue
-        return cand, None, [c for c in window if c]
-    return None, ("label_like" if saw_label_like else "empty"), [c for c in window if c]
+        row = rows[row_idx + delta_row][1]
+        window = [normalize_text(row[i]) for i in range(anchor_col, min(len(row), anchor_col + 3))]
+        values.extend([c for c in window if c])
+        for cand in window:
+            if not cand:
+                continue
+            cand_norm = normalize_for_match(cand)
+            if _is_label_like(cand) or "контроль" in cand_norm or "предст" in cand_norm:
+                continue
+            return cand, None, values
+    return None, ("label_like" if values else "empty"), values
 
 
 def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approvals, dict[str, object]]:
@@ -232,14 +277,14 @@ def _extract_approvals(rows: list[tuple[int, list[str | None]]]) -> tuple[Approv
     debug = {"found": [], "missing": [], "approvals_candidates": {}, "approvals_rejected_reasons": {}}
     tail = rows[max(0, len(rows) - 80) :]
 
-    for _, row in tail:
+    for ridx, (_, row) in enumerate(tail):
         norm_row = [normalize_for_match(v) for v in row]
         for field, anchors in APPROVAL_ANCHORS.items():
             if getattr(approvals, field) is not None:
                 continue
             for col_idx, text in enumerate(norm_row, start=1):
                 if text and all(a in text for a in anchors):
-                    val, reason, window = _extract_approval_value(row, col_idx)
+                    val, reason, window = _extract_approval_value(tail, ridx, col_idx)
                     debug["approvals_candidates"][field] = normalize_text(row[col_idx] if col_idx < len(row) else None)
                     debug.setdefault("approvals_value_windows", {})[field] = window
                     if val:
@@ -270,8 +315,11 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "developer_search_window": [],
         "code_search_window": [],
         "sheet_no_declared_search_window": [],
+        "sheet_no_value_window": [],
         "code_value_window": [],
-        "dash_field_candidates": {},
+        "dash_field_value_windows": {},
+        "approvals_value_windows_expanded": {},
+        "approvals_final_candidates": {},
     }
     if sheet is None:
         debug["missing_fields"] = list(asdict(header).keys())
@@ -286,6 +334,7 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
     header.sheet_total_declared = sheet_total if sheet_total is not None else sheet_total_hint
     debug["fields"]["sheet_total_declared"] = sheet_total_debug
     debug["sheet_no_declared_search_window"] = sheet_dbg.get("sheet_no_declared_search_window", [])
+    debug["sheet_no_value_window"] = [sheet_dbg.get("sheet_no_declared_candidate")] if sheet_dbg.get("sheet_no_declared_candidate") is not None else []
     debug["fields"]["sheet_no_declared"] = {
         "raw_candidate": sheet_dbg.get("sheet_no_declared_candidate"),
         "cleaned_candidate": sheet_dbg.get("sheet_no_declared_candidate"),
@@ -293,6 +342,21 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
         "final_value": header.sheet_no_declared,
         "collapsed_repeats_applied": False,
     }
+
+    code_val, code_windows = _extract_code_dedicated(rows)
+    if code_val is not None:
+        header.code = code_val
+        debug["fields"]["code"] = {"raw_candidate": code_val, "cleaned_candidate": code_val, "rejected_reason": None, "final_value": code_val, "collapsed_repeats_applied": False}
+        debug["normalized_header_fields"]["code"] = code_val
+    debug["code_value_window"] = code_windows
+
+    for fld, lbl in (("implementation_instruction", "указания о внедрении"), ("applicability", "применяемость"), ("distribution", "разослать")):
+        dash_val, dash_windows = _extract_dash_field(rows, lbl)
+        debug["dash_field_value_windows"][fld] = dash_windows
+        if dash_val is not None:
+            setattr(header, fld, dash_val)
+            debug["normalized_header_fields"][fld] = dash_val
+            debug["fields"][fld] = {"raw_candidate": dash_val, "cleaned_candidate": dash_val, "rejected_reason": None, "final_value": dash_val, "collapsed_repeats_applied": False}
 
     for i, (_, row_values) in enumerate(rows[:80]):
         row_norm = [normalize_for_match(v) for v in row_values]
@@ -302,7 +366,7 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
             debug["code_search_window"].append(row_txt)
 
         for field, anchors in HEADER_ANCHORS.items():
-            if field == "sheet_no_declared" or getattr(header, field) is not None:
+            if field in {"sheet_no_declared", "code", "implementation_instruction", "applicability", "distribution"} or getattr(header, field) is not None:
                 continue
             for col_idx, norm in enumerate(row_norm, start=1):
                 if not norm:
@@ -319,10 +383,6 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
                 if not raw_candidate and i + 1 < len(rows):
                     raw_candidate = _extract_right_zone(rows[i + 1][1], col_idx, width)
 
-                if field == "code":
-                    debug["code_value_window"].append(raw_candidate)
-                if field in {"implementation_instruction", "applicability", "distribution"}:
-                    debug["dash_field_candidates"][field] = raw_candidate
                 cleaned_candidate, reject_reason, collapsed = _sanitize_candidate(field, raw_candidate, row_norm)
                 if reject_reason is None and cleaned_candidate:
                     setattr(header, field, cleaned_candidate)
@@ -358,6 +418,8 @@ def extract_document_header(sheet: Worksheet | None) -> tuple[DocumentHeader, Ap
     debug["approvals_missing"] = appr_debug["missing"]
     debug["approvals_candidates"] = appr_debug["approvals_candidates"]
     debug["approvals_rejected_reasons"] = appr_debug["approvals_rejected_reasons"]
+    debug["approvals_value_windows_expanded"] = appr_debug.get("approvals_value_windows", {})
+    debug["approvals_final_candidates"] = asdict(approvals)
 
     fields = asdict(header)
     debug["found_fields"] = [k for k, v in fields.items() if v is not None]
