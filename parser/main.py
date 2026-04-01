@@ -97,6 +97,7 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
             f"[debug] header_found={header_debug.get('found_fields')} header_missing={header_debug.get('missing_fields')}",
             file=sys.stderr,
         )
+        print(f"[debug] header_fields_debug={header_debug.get('fields')}", file=sys.stderr)
         print(
             f"[debug] validation_errors={parsed_document.validation.errors} validation_warnings={parsed_document.validation.warnings}",
             file=sys.stderr,
