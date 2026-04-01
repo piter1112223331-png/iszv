@@ -70,4 +70,5 @@ def test_notice_missing_and_sheet_count_mismatch_warnings():
     result = validate_document(_doc_with_changes([change]))
     assert "notice_number_missing" in result.warnings
     assert "sheet_count_mismatch" in result.warnings
-    assert any(w.startswith("header_field_missing:") for w in result.warnings)
+    assert "header_field_missing:sender" in result.warnings
+    assert "header_field_missing:release_center" in result.warnings

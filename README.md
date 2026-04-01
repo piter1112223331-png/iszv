@@ -50,6 +50,9 @@ Warnings:
 - `header_missing`
 - `validation_errors`
 - `validation_warnings`
+- `normalized_header_fields`
+- `collapsed_repeats_applied`
+- `header_validation_fields_checked`
 
 Для first block по-прежнему доступны:
 - `first_block_inline_text_before_cleanup`

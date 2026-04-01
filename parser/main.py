@@ -8,7 +8,7 @@ from pathlib import Path
 from parser.header_extractor import extract_document_header
 from parser.models import ParsedDocument
 from parser.sheet_parser import parse_sheet
-from parser.validator import validate_document
+from parser.validator import IMPORTANT_HEADER_FIELDS, validate_document
 from parser.workbook_loader import WorkbookLoadError, load_xlsx
 
 
@@ -98,6 +98,11 @@ def parse_notice(path: str, debug: bool = False) -> ParsedDocument:
             file=sys.stderr,
         )
         print(f"[debug] header_fields_debug={header_debug.get('fields')}", file=sys.stderr)
+        print(
+            f"[debug] normalized_header_fields={header_debug.get('normalized_header_fields')} collapsed_repeats_applied={header_debug.get('collapsed_repeats_applied')}",
+            file=sys.stderr,
+        )
+        print(f"[debug] header_validation_fields_checked={list(IMPORTANT_HEADER_FIELDS)}", file=sys.stderr)
         print(
             f"[debug] validation_errors={parsed_document.validation.errors} validation_warnings={parsed_document.validation.warnings}",
             file=sys.stderr,

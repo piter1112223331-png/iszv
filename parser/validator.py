@@ -6,6 +6,8 @@ from parser.models import ParsedDocument, ValidationResult
 
 
 IMPORTANT_HEADER_FIELDS = (
+    "sender",
+    "release_center",
     "reason",
     "release_date",
     "stock_instruction",
